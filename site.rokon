@@ -1,0 +1,11 @@
+// Site configuration (read by main.rok).
+Site {
+    title: "rokstones.io",
+    tagline: "rok 패키지 (stone) 레지스트리",
+    index: "../rokstones.io-index",
+    index_repo: "https://github.com/rok-lang/rokstones.io-index",
+    base_url: "https://rokstones.io",
+    docs: "https://rok-lang.org",
+    cache: ".cache",
+    out: "public",
+}

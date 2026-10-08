@@ -1,0 +1,243 @@
+// rokstones.io: renders the registry index (rokstones.io-index) into a
+// static site, then checks every internal link.
+//
+//   rok run                      build into `out` (site.rokon)
+//   rok run -- check             build, and exit 1 on a broken link or a bad index line
+//   rok run -- --demo            use fixtures/index and fixtures/readme
+//   rok run -- --offline         no `git fetch` for READMEs (cache only)
+//   rok run -- --index <dir>     another index checkout
+
+mod highlight;
+mod layout;
+mod markdown;
+mod stones;
+
+use rok::std::env;
+use rok::std::fs;
+use rok::std::rokon;
+use rok::core::task::time::Instant;
+use layout::dir_of;
+
+#[derive(Rokon)]
+pub struct Site {
+    pub title: str;
+    pub tagline: str;
+    /// Checkout of the index, relative to this file.
+    pub index: str = "../rokstones.io-index";
+    /// The index's web page (links to stone files, pull requests).
+    pub index_repo: str;
+    pub base_url: str = "https://rokstones.io";
+    pub docs: str = "https://rok-lang.org";
+    /// README cache (git objects and extracted READMEs).
+    pub cache: str = ".cache";
+    pub out: str = "public";
+}
+
+// ---- paths ----
+
+/// `a/./b/../c` → `a/c`; leading `..` kept.
+fn norm(p: str) -> str {
+    let segs: List<str> = List::new();
+    for s in p.split("/") {
+        if s.is_empty() || s == "." { continue; }
+        if s == ".." && segs.len() > 0 && segs[segs.len() - 1] != ".." {
+            segs.pop();
+            continue;
+        }
+        segs.push(s);
+    }
+    let out = StrBuf::new();
+    for k in 0..segs.len() {
+        if k > 0 { out.push('/'); }
+        out.push_str(segs[k]);
+    }
+    out.to_str()
+}
+
+fn join(dir: str, p: str) -> str {
+    if dir.is_empty() { p } else { dir + "/" + p }
+}
+
+fn json_str(s: str) -> str {
+    let out = StrBuf::new();
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if (c as u32) < 0x20u32 {
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out.to_str()
+}
+
+fn write(root: str, path: str, data: str) throws {
+    let full = root + "/" + path;
+    try fs::create_dir_all(dir_of(full));
+    try fs::write(full, data);
+}
+
+// ---- link check ----
+
+/// Every value of `name="..."` in `html`.
+fn attr_values(cs: List<char>, name: str) -> List<str> {
+    let pat: List<char> = List::new();
+    for c in name.chars() { pat.push(c); }
+    pat.push('=');
+    pat.push('"');
+    let out: List<str> = List::new();
+    let n = cs.len();
+    let m = pat.len();
+    let i = 0usize;
+    while i + m <= n {
+        let hit = i == 0 || cs[i - 1] == ' ';
+        let k = 0usize;
+        while hit && k < m {
+            if cs[i + k] != pat[k] { hit = false; }
+            k += 1;
+        }
+        if !hit {
+            i += 1;
+            continue;
+        }
+        let v = StrBuf::new();
+        let j = i + m;
+        while j < n && cs[j] != '"' {
+            v.push(cs[j]);
+            j += 1;
+        }
+        out.push(v.to_str().replace("&quot;", "\"").replace("&amp;", "&"));
+        i = j;
+    }
+    out
+}
+
+fn chars_of(s: str) -> List<char> {
+    let cs: List<char> = List::new();
+    for c in s.chars() { cs.push(c); }
+    cs
+}
+
+/// Broken internal `href` / `src` targets (missing file or anchor).
+fn check(files: Dict<str, str>, statics: Set<str>) -> List<str> {
+    let ids: Dict<str, Set<str>> = Dict::new();
+    let refs: Dict<str, List<str>> = Dict::new();
+    for out in files.keys() {
+        let cs = chars_of(files[out]);
+        let s: Set<str> = Set::new();
+        for id in attr_values(cs, "id") { s.insert(id); }
+        ids.insert(out, s);
+        let r = attr_values(cs, "href");
+        r.extend(attr_values(cs, "src"));
+        refs.insert(out, r);
+    }
+    let bad: List<str> = List::new();
+    for out in files.keys() {
+        for href in refs[out] {
+            if href.contains("://") || href.starts_with("mailto:") || href == "#" { continue; }
+            let path = href;
+            let frag = "";
+            if let k: usize = href.find("#") {
+                path = href[:k];
+                frag = href[k + 1:];
+            }
+            let target = if path.is_empty() { out } else { norm(join(dir_of(out), path)) };
+            if let s: Set<str> = ids.get(target) {
+                if !frag.is_empty() && !s.contains(frag) { bad.push(f"{out}: {href} (no anchor)"); }
+            } else if !statics.contains(target) {
+                bad.push(f"{out}: {href} (no page)");
+            }
+        }
+    }
+    bad
+}
+
+// ---- build ----
+
+fn main() throws {
+    let t0 = Instant::now();
+    let args = env::args();
+    let strict = false;
+    let demo = false;
+    let offline = false;
+    let index_arg = "";
+    let i = 1usize;
+    while i < args.len() {
+        let a = args[i];
+        if a == "check" {
+            strict = true;
+        } else if a == "--demo" {
+            demo = true;
+        } else if a == "--offline" {
+            offline = true;
+        } else if a == "--index" && i + 1 < args.len() {
+            i += 1;
+            index_arg = args[i];
+        } else {
+            eprintln(f"unknown argument `{a}` (check, --demo, --offline, --index <dir>)");
+            env::exit(2);
+        }
+        i += 1;
+    }
+
+    let site: Site = try rokon::from_str(try fs::read_to_str("site.rokon"));
+    let dir = if demo { "fixtures/index" } else if !index_arg.is_empty() { index_arg } else { site.index };
+    dir = dir.strip_suffix("/") ?? dir;
+    if !fs::exists(dir) {
+        eprintln(f"error: no index at {dir} (site.rokon `index`, or --demo)");
+        env::exit(1);
+    }
+    let readmes = stones::Readmes { cache: site.cache, fixed: if demo { "fixtures/readme" } else { "" }, offline: offline };
+    let idx = stones::load(dir, readmes);
+    for e in idx.errors { eprintln(f"index: {e}"); }
+    let all = idx.stones;
+    let have: Set<str> = Set::new();
+    for s in all { have.insert(s.name); }
+
+    let files: Dict<str, str> = Dict::new();
+    let guide = markdown::render(try fs::read_to_str("pages/index.md"), |h| h);
+    files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all, guide.html)));
+    files.insert("stones/index.html", layout::page(site, "stones/index.html", "모든 stone", layout::all_stones(all)));
+    for s in all {
+        let out = layout::stone_out(s.name);
+        files.insert(out, layout::page(site, out, s.name, layout::stone_page(site, s, have)));
+    }
+
+    // Search index: every stone, its latest version and description.
+    let sx = StrBuf::new();
+    sx.push('[');
+    for k in 0..all.len() {
+        let s = all[k];
+        if k > 0 { sx.push_str(",\n"); }
+        sx.push_str(f"{{\"t\":{json_str(s.name)},\"u\":{json_str(layout::stone_out(s.name))},\"v\":{json_str(s.latest.vers)},\"p\":{json_str(s.desc)}}}");
+    }
+    sx.push_str("]\n");
+
+    let out_root = site.out;
+    if fs::exists(out_root) { try fs::remove_dir_all(out_root); }
+    for out in files.keys() { try write(out_root, out, files[out]); }
+    try write(out_root, "search-index.json", sx.to_str());
+    let statics: Set<str> = Set::new();
+    statics.insert("search-index.json");
+    for entry in fs::walk("static") {
+        let e = try entry.get();
+        if !e.is_file() { continue; }
+        let name = e.path().as_str()["static/".len():];
+        try fs::copy(e.path(), out_root + "/" + name);
+        statics.insert(name);
+    }
+
+    let bad = check(files, statics);
+    for b in bad { eprintln(f"broken link: {b}"); }
+    let readme_n = 0usize;
+    for s in all {
+        if !s.readme.is_empty() { readme_n += 1; }
+    }
+    println(f"{dir}: {all.len()} stones ({readme_n} with README), {idx.errors.len()} index errors → {out_root}/ ({files.len()} html), {bad.len()} broken links, {t0.elapsed():?}");
+    if strict && (bad.len() > 0 || idx.errors.len() > 0) { env::exit(1); }
+}

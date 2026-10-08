@@ -1,0 +1,502 @@
+// The registry index: one file per stone, one `Stone { .. }` line per
+// version (see the index's README). Reading, semver order, reverse
+// dependencies, and each stone's README fetched from its source commit.
+
+use rok::std::fs;
+use rok::std::rokon;
+use rok::std::rokon::Value;
+use rok::std::process::Command;
+use rok::core::cmp::Ordering;
+use pkg::markdown;
+
+pub struct Req {
+    pub name: str;
+    pub req: str;
+    /// `"normal"` or `"dev"`.
+    pub kind: str;
+    /// Another index's url; `""` for this one.
+    pub registry: str;
+}
+
+pub struct Version {
+    pub vers: str;
+    pub deps: List<Req>;
+    pub url: str;
+    pub rev: str;
+    pub cksum: str;
+    pub yanked: bool;
+}
+
+pub struct RDep {
+    pub name: str;
+    pub req: str;
+}
+
+pub struct Stone {
+    pub name: str;
+    /// Path of its file in the index (`ge/om/geom`).
+    pub file: str;
+    /// Publish order, oldest first.
+    pub versions: List<Version>;
+    pub latest: Version;
+    /// Last commit touching its file: unix time and `YYYY-MM-DD`; 0 / `""`
+    /// when the index has no git history.
+    pub time: i64;
+    pub date: str;
+    /// Rendered README of the latest version; `""` when unavailable.
+    pub readme: str;
+    /// First paragraph of the README, as text.
+    pub desc: str;
+    /// Stones whose latest version depends on this one (normal deps).
+    pub rdeps: List<RDep>;
+}
+
+pub struct Index {
+    pub stones: List<Stone>;
+    /// Malformed lines and misplaced files.
+    pub errors: List<str>;
+}
+
+/// Where README text comes from.
+pub struct Readmes {
+    /// Cache directory (`<cache>/git`, `<cache>/readme/<name>/<rev>.md`).
+    pub cache: str;
+    /// Directory of `<name>.md` used instead of git (`--demo`); `""`: none.
+    pub fixed: str;
+    /// Never run `git fetch`.
+    pub offline: bool;
+}
+
+// ---- names and paths ----
+
+pub fn is_name(s: str) -> bool {
+    if s.is_empty() { return false; }
+    let first = true;
+    for c in s.chars() {
+        let ok = c.is_ascii_alphanumeric() || c == '_';
+        if !ok || (first && c.is_ascii_digit()) { return false; }
+        first = false;
+    }
+    true
+}
+
+/// A stone's file: `1/a`, `2/ab`, `3/a/abc`, `ab/cd/abcd..`.
+pub fn shard(name: str) -> str {
+    let n = name.to_lowercase();
+    let k = n.len();
+    if k == 1 { return "1/" + n; }
+    if k == 2 { return "2/" + n; }
+    if k == 3 { return "3/" + n[:1] + "/" + n; }
+    n[:2] + "/" + n[2:4] + "/" + n
+}
+
+fn is_hex40(s: str) -> bool {
+    if s.len() != 40 { return false; }
+    for c in s.chars() {
+        if !(c.is_ascii_digit() || (c >= 'a' && c <= 'f')) { return false; }
+    }
+    true
+}
+
+// ---- semver ----
+
+fn num(s: str) -> u64 { try s.parse::<u64>() catch _ { 0u64 } }
+
+fn is_num(s: str) -> bool {
+    if s.is_empty() { return false; }
+    for c in s.chars() {
+        if !c.is_ascii_digit() { return false; }
+    }
+    true
+}
+
+fn cmp_u64(a: u64, b: u64) -> Ordering {
+    if a < b { Ordering::Less } else if a > b { Ordering::Greater } else { Ordering::Equal }
+}
+
+fn cmp_str(a: str, b: str) -> Ordering {
+    if a < b { Ordering::Less } else if a > b { Ordering::Greater } else { Ordering::Equal }
+}
+
+/// `1.2.3-pre+build` → core `1.2.3`, pre `pre` (build dropped).
+fn split_vers(v: str) -> (str, str) {
+    let s = v;
+    if let k: usize = s.find("+") { s = s[:k]; }
+    if let k: usize = s.find("-") { return (s[:k], s[k + 1:]); }
+    (s, "")
+}
+
+/// Semver precedence.
+pub fn cmp_vers(a: str, b: str) -> Ordering {
+    let (ca, pa) = split_vers(a);
+    let (cb, pb) = split_vers(b);
+    let xa: List<str> = List::new();
+    for p in ca.split(".") { xa.push(p); }
+    let xb: List<str> = List::new();
+    for p in cb.split(".") { xb.push(p); }
+    for k in 0usize..3usize {
+        let na = if k < xa.len() { num(xa[k]) } else { 0u64 };
+        let nb = if k < xb.len() { num(xb[k]) } else { 0u64 };
+        let o = cmp_u64(na, nb);
+        if o != Ordering::Equal { return o; }
+    }
+    // A pre-release sorts before its release.
+    if pa.is_empty() || pb.is_empty() { return cmp_u64(pb.len() as u64, pa.len() as u64); }
+    let ia: List<str> = List::new();
+    for p in pa.split(".") { ia.push(p); }
+    let ib: List<str> = List::new();
+    for p in pb.split(".") { ib.push(p); }
+    let k = 0usize;
+    while k < ia.len() && k < ib.len() {
+        let x = ia[k];
+        let y = ib[k];
+        let o = if is_num(x) && is_num(y) {
+            cmp_u64(num(x), num(y))
+        } else if is_num(x) != is_num(y) {
+            if is_num(x) { Ordering::Less } else { Ordering::Greater }
+        } else {
+            cmp_str(x, y)
+        };
+        if o != Ordering::Equal { return o; }
+        k += 1;
+    }
+    cmp_u64(ia.len() as u64, ib.len() as u64)
+}
+
+pub fn is_pre(v: str) -> bool { !split_vers(v).1.is_empty() }
+
+/// The version shown by default: the highest not yanked, a release over a
+/// pre-release; the highest of all when every version is yanked.
+fn pick_latest(vs: List<Version>) -> Version {
+    let best = vs[0];
+    let rank = |v: Version| if v.yanked { 0 } else if is_pre(v.vers) { 1 } else { 2 };
+    for v in vs {
+        let r = rank(v);
+        let rb = rank(best);
+        if r > rb || (r == rb && cmp_vers(v.vers, best.vers) == Ordering::Greater) { best = v; }
+    }
+    best
+}
+
+/// The requirement `rok add` would write: `^1.2`, `^0.3`, `^0.0.4`.
+pub fn caret(v: str) -> str {
+    let (core, pre) = split_vers(v);
+    if !pre.is_empty() { return "=" + v; }
+    let xs: List<str> = List::new();
+    for p in core.split(".") { xs.push(p); }
+    if xs.len() < 3 { return "^" + core; }
+    if xs[0] != "0" { return f"^{xs[0]}.{xs[1]}"; }
+    if xs[1] != "0" { return f"^0.{xs[1]}"; }
+    f"^0.0.{xs[2]}"
+}
+
+// ---- lines ----
+
+fn get_str(f: OrderedDict<str, Value>, k: str) -> str | none {
+    if let v: Value = f.get(k) {
+        if let Value::Str(s) = v { return s; }
+    }
+    none
+}
+
+fn fields_of(v: Value, name: str) -> OrderedDict<str, Value> | none {
+    if let Value::Struct { name: n, fields } = v {
+        if n is none || (n ?? "") == name { return fields; }
+    }
+    none
+}
+
+pub struct LineError {
+    pub msg: str;
+}
+
+impl Display for LineError {
+    fn display(self) -> str { self.msg }
+}
+
+impl Debug for LineError {
+    fn debug(self) -> str { f"LineError({self.msg})" }
+}
+
+impl Error for LineError {}
+
+fn bad(msg: str) -> LineError { LineError { msg: msg } }
+
+fn parse_req(v: Value) throws (LineError) -> Req {
+    let f: OrderedDict<str, Value> = OrderedDict::new();
+    if let x: OrderedDict<str, Value> = fields_of(v, "") { f = x; } else { throw bad("a dependency is `{ name: .., req: .., kind: .. }`"); }
+    let name = get_str(f, "name") ?? "";
+    if !is_name(name) { throw bad(f"bad dependency name `{name}`"); }
+    let kind = get_str(f, "kind") ?? "normal";
+    if kind != "normal" && kind != "dev" { throw bad(f"bad dependency kind `{kind}`"); }
+    Req { name: name, req: get_str(f, "req") ?? "*", kind: kind, registry: get_str(f, "registry") ?? "" }
+}
+
+/// One index line: the stone's name and the version.
+pub fn parse_line(line: str) throws (LineError) -> (str, Version) {
+    let v = try rokon::parse(line) catch e { throw bad(f"{e}"); };
+    let f: OrderedDict<str, Value> = OrderedDict::new();
+    if let x: OrderedDict<str, Value> = fields_of(v, "Stone") { f = x; } else { throw bad("not a `Stone { .. }`"); }
+    let name = get_str(f, "name") ?? "";
+    if !is_name(name) { throw bad(f"bad name `{name}`"); }
+    let vers = get_str(f, "vers") ?? "";
+    if vers.is_empty() { throw bad("no `vers`"); }
+    let deps: List<Req> = List::new();
+    if let d: Value = f.get("deps") {
+        if let Value::List(xs) = d {
+            for x in xs { deps.push(try parse_req(x)); }
+        } else {
+            throw bad("`deps` is a list");
+        }
+    }
+    let url = "";
+    let rev = "";
+    if let s: Value = f.get("source") {
+        if let Value::Variant { path, args, named } = s {
+            if path == "Dep::git" && args.len() == 1 {
+                if let Value::Str(u) = args[0] { url = u; }
+                rev = get_str(named, "rev") ?? "";
+            }
+        }
+    }
+    if url.is_empty() || !is_hex40(rev) { throw bad("`source` is `Dep::git(\"<url>\", rev: \"<commit>\")`"); }
+    let yanked = false;
+    if let y: Value = f.get("yanked") {
+        if let Value::Bool(b) = y { yanked = b; }
+    }
+    (name, Version { vers: vers, deps: deps, url: url, rev: rev, cksum: get_str(f, "cksum") ?? "", yanked: yanked })
+}
+
+// ---- git ----
+
+/// `git args..`; its stdout, or none when it fails or cannot start.
+fn git(args: List<str>) -> str | none {
+    let o = try Command::new("git").args(args).env("GIT_TERMINAL_PROMPT", "0").output() catch _ { return none; };
+    if !o.status.success() { return none; }
+    try str::from_utf8(o.stdout) catch _ { none }
+}
+
+/// Last commit (unix time, date) of each file of the index `dir`.
+fn file_dates(dir: str) -> Dict<str, (i64, str)> {
+    let out: Dict<str, (i64, str)> = Dict::new();
+    let log = git(["-C", dir, "log", "--relative", "--name-only", "--format=@%ct %cs"]) ?? "";
+    let cur = (0i64, "");
+    for l in log.split("\n") {
+        if l.starts_with("@") {
+            if let p: (str, str) = l[1:].split_once(" ") {
+                cur = (try p.0.parse::<i64>() catch _ { 0i64 }, p.1);
+            }
+        } else if !l.is_empty() && !out.contains_key(l) {
+            out.insert(l, cur);
+        }
+    }
+    out
+}
+
+fn fetchable(url: str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://") || url.starts_with("file://") || url.starts_with("/")
+}
+
+/// README text of `url` at `rev`, cached by commit. A failed fetch is
+/// not cached, so the next online build tries again.
+fn readme_text(r: Readmes, name: str, url: str, rev: str) -> str {
+    if !r.fixed.is_empty() {
+        let p = f"{r.fixed}/{name}.md";
+        return if fs::exists(p) { try fs::read_to_str(p) catch _ { "" } } else { "" };
+    }
+    let cached = f"{r.cache}/readme/{name}/{rev}.md";
+    if fs::exists(cached) { return try fs::read_to_str(cached) catch _ { "" }; }
+    if r.offline || !fetchable(url) { return ""; }
+    let db = r.cache + "/git";
+    if !fs::exists(db) {
+        try fs::create_dir_all(r.cache) catch _ { return ""; };
+        if git(["init", "-q", "--bare", db]) is none { return ""; }
+    }
+    if git(["-C", db, "cat-file", "-e", rev + "^{commit}"]) is none {
+        if git(["-C", db, "fetch", "-q", "--depth", "1", url, rev]) is none {
+            eprintln(f"warning: {name}: cannot fetch {url} {rev[:12]}");
+            return "";
+        }
+    }
+    let text = "";
+    for f in ["README.md", "readme.md", "Readme.md", "README"] {
+        if let t: str = git(["-C", db, "show", f"{rev}:{f}"]) {
+            text = t;
+            break;
+        }
+    }
+    try fs::create_dir_all(f"{r.cache}/readme/{name}") catch _ { return text; };
+    try fs::write(cached, text) catch _ {};
+    text
+}
+
+/// Where a README's relative link points: the file in the source repo
+/// at the commit (GitHub / GitLab style), else the repo itself.
+fn repo_link(url: str, rev: str, h: str) -> str {
+    if h.starts_with("#") || h.starts_with("https://") || h.starts_with("http://") || h.starts_with("mailto:") { return h; }
+    // Any other scheme (`javascript:` ..) is dropped.
+    if h.contains(":") { return "#"; }
+    let web = web_of(url);
+    if web.is_empty() { return "#"; }
+    let path = h;
+    while path.starts_with("./") { path = path[2:]; }
+    while path.starts_with("/") { path = path[1:]; }
+    let lower = path.to_lowercase();
+    let raw = false;
+    for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"] {
+        if lower.ends_with(ext) { raw = true; }
+    }
+    f"{web}/{if raw { "raw" } else { "blob" }}/{rev}/{path}"
+}
+
+/// The repo's web page for a GitHub / GitLab / Codeberg url; `""` otherwise.
+pub fn web_of(url: str) -> str {
+    let u = url.strip_suffix(".git") ?? url;
+    u = u.strip_suffix("/") ?? u;
+    for host in ["https://github.com/", "https://gitlab.com/", "https://codeberg.org/"] {
+        if u.starts_with(host) { return u; }
+    }
+    ""
+}
+
+/// Link to the source tree at `rev`.
+pub fn tree_link(url: str, rev: str) -> str {
+    let web = web_of(url);
+    if web.is_empty() { return if fetchable(url) && !url.starts_with("/") { url } else { "" }; }
+    if web.starts_with("https://codeberg.org/") { return f"{web}/src/commit/{rev}"; }
+    f"{web}/tree/{rev}"
+}
+
+/// First paragraph of rendered HTML, as text, at most `n` chars.
+fn first_para(html: str, n: usize) -> str {
+    let a = html.find("<p>") ?? html.len();
+    if a == html.len() { return ""; }
+    let rest = html[a + 3:];
+    let b = rest.find("</p>") ?? rest.len();
+    let t = markdown::strip_tags(rest[:b]).replace("\n", " ").trim();
+    if t.char_count() <= n { return t; }
+    let out = StrBuf::new();
+    let k = 0usize;
+    for c in t.chars() {
+        if k >= n { break; }
+        out.push(c);
+        k += 1;
+    }
+    out.to_str().trim_end() + "…"
+}
+
+// ---- the index ----
+
+pub fn load(dir: str, r: Readmes) -> Index {
+    let errors: List<str> = List::new();
+    let by_name: Dict<str, List<Version>> = Dict::new();
+    let files: Dict<str, str> = Dict::new();
+    for entry in fs::walk(dir) {
+        let e = try entry.get() catch err {
+            errors.push(f"{err}");
+            continue;
+        };
+        if !e.is_file() { continue; }
+        let rel = e.path().as_str()[dir.len() + 1:];
+        // Top-level files (config.rokon, README.md) and git internals.
+        if !rel.contains("/") || rel.starts_with(".") { continue; }
+        let text = try fs::read_to_str(e.path()) catch err {
+            errors.push(f"{rel}: {err}");
+            continue;
+        };
+        let n = 0usize;
+        for line in text.split("\n") {
+            n += 1;
+            if line.trim().is_empty() { continue; }
+            let (name, v) = try parse_line(line) catch err {
+                errors.push(f"{rel}:{n}: {err}");
+                continue;
+            };
+            if shard(name) != rel {
+                errors.push(f"{rel}:{n}: `{name}` belongs in {shard(name)}");
+                continue;
+            }
+            if !by_name.contains_key(name) {
+                by_name.insert(name, List::new());
+                files.insert(name, rel);
+            }
+            by_name[name].push(v);
+        }
+    }
+
+    let names: List<str> = List::new();
+    for k in by_name.keys() { names.push(k); }
+    names.sort();
+
+    let latest: Dict<str, Version> = Dict::new();
+    for k in names { latest.insert(k, pick_latest(by_name[k])); }
+    let rdeps: Dict<str, List<RDep>> = Dict::new();
+    for k in names {
+        let seen: Set<str> = Set::new();
+        for d in latest[k].deps {
+            if d.kind != "normal" || !d.registry.is_empty() || seen.contains(d.name) { continue; }
+            seen.insert(d.name);
+            if !rdeps.contains_key(d.name) { rdeps.insert(d.name, List::new()); }
+            rdeps[d.name].push(RDep { name: k, req: d.req });
+        }
+    }
+
+    let dates = file_dates(dir);
+    let stones: List<Stone> = List::new();
+    for k in names {
+        let l = latest[k];
+        let html = "";
+        let text = readme_text(r, k, l.url, l.rev);
+        if !text.is_empty() {
+            let doc = markdown::render_untrusted(text, |h| repo_link(l.url, l.rev, h));
+            html = doc.html;
+        }
+        let (t, d) = dates.get(files[k]) ?? (0i64, "");
+        stones.push(Stone {
+            name: k,
+            file: files[k],
+            versions: by_name[k],
+            latest: l,
+            time: t,
+            date: d,
+            readme: html,
+            desc: first_para(html, 140),
+            rdeps: rdeps.get(k) ?? List::new(),
+        });
+    }
+    Index { stones: stones, errors: errors }
+}
+
+#[cfg(test)]
+fn expect(ok: bool, what: str) {
+    if !ok { panic(what); }
+}
+
+#[test]
+fn semver_order() {
+    expect(cmp_vers("1.2.3", "1.10.0") == Ordering::Less, "numeric parts");
+    expect(cmp_vers("1.0.0-alpha", "1.0.0") == Ordering::Less, "pre before release");
+    expect(cmp_vers("1.0.0-alpha.2", "1.0.0-alpha.10") == Ordering::Less, "numeric pre ids");
+    expect(cmp_vers("1.0.0-alpha", "1.0.0-alpha.1") == Ordering::Less, "shorter pre first");
+    expect(cmp_vers("1.0.0+b", "1.0.0") == Ordering::Equal, "build ignored");
+    expect(caret("1.2.3") == "^1.2" && caret("0.3.1") == "^0.3" && caret("0.0.4") == "^0.0.4", "caret");
+}
+
+#[test]
+fn shards() {
+    expect(shard("a") == "1/a" && shard("Ab") == "2/ab" && shard("num") == "3/n/num", "short");
+    expect(shard("Geom") == "ge/om/geom", "long");
+    expect(is_name("geom_2") && !is_name("2d") && !is_name("a-b") && !is_name(""), "names");
+}
+
+#[test]
+fn lines() {
+    let (name, v) = try parse_line("Stone { name: \"geom\", vers: \"0.3.1\", deps: [{ name: \"num\", req: \"^1.2\", kind: \"normal\" }], source: Dep::git(\"https://github.com/o/geom\", rev: \"4f0c2a9e1b7d3c58a6e09f21d4b8c7a3e5f60123\"), cksum: \"x\", yanked: false }") catch e { panic(e.msg); };
+    expect(name == "geom" && v.vers == "0.3.1" && v.deps.len() == 1 && v.deps[0].req == "^1.2", "fields");
+    expect(v.url == "https://github.com/o/geom" && !v.yanked, "source");
+    let bad = try parse_line("Stone { name: \"x\", vers: \"1.0.0\", deps: [], source: Dep::path(\"..\"), cksum: \"\", yanked: false }") catch _ { ("", v) };
+    expect(bad.0.is_empty(), "path source rejected");
+    expect(repo_link("https://github.com/o/r.git", "abc", "docs/a.md") == "https://github.com/o/r/blob/abc/docs/a.md", "blob link");
+    expect(repo_link("https://github.com/o/r", "abc", "./img/x.PNG") == "https://github.com/o/r/raw/abc/img/x.PNG", "raw link");
+    expect(repo_link("https://github.com/o/r", "abc", "javascript:alert(1)") == "#", "scheme dropped");
+}

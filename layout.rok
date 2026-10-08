@@ -1,0 +1,233 @@
+// Page chrome (header, search, footer) and the generated pages: landing,
+// stone list, one page per stone.
+
+use pkg::Site;
+use pkg::highlight;
+use pkg::markdown::esc;
+use pkg::stones;
+use pkg::stones::{Stone, Version};
+
+/// `../` once per directory level of `out`, back to the site root.
+pub fn root_of(out: str) -> str {
+    let n = 0usize;
+    for c in out.chars() {
+        if c == '/' { n += 1; }
+    }
+    "../".repeat(n)
+}
+
+pub fn dir_of(p: str) -> str {
+    if let k: usize = p.rfind("/") { return p[:k]; }
+    ""
+}
+
+pub fn stone_out(name: str) -> str { f"stones/{name}.html" }
+
+fn short(rev: str) -> str { if rev.len() > 12 { rev[:12] } else { rev } }
+
+fn search_box(big: bool) -> str {
+    let cls = if big { "search big" } else { "search" };
+    f"<div class=\"{cls}\"><input class=\"q\" type=\"search\" placeholder=\"stone 검색 ( / )\" aria-label=\"stone 검색\" autocomplete=\"off\"><ul class=\"results\" hidden></ul></div>"
+}
+
+pub fn page(site: Site, out: str, title: str, body: str) -> str {
+    let root = root_of(out);
+    let home = out == "index.html";
+    let all = if out == "stones/index.html" { " aria-current=\"page\"" } else { "" };
+    let full = if home { site.title + " — " + site.tagline } else { title + " — " + site.title };
+    let search = if home { "" } else { search_box(false) };
+    let kind = if home { "home" } else { "doc" };
+    f"<!doctype html>
+<html lang=\"ko\">
+<head>
+<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<title>{esc(full)}</title>
+<link rel=\"canonical\" href=\"{esc(site.base_url)}/{esc(out)}\">
+<link rel=\"stylesheet\" href=\"{root}style.css\">
+<link rel=\"icon\" href=\"{root}logo.png\">
+</head>
+<body class=\"{kind}\" data-root=\"{root}\">
+<header class=\"top\">
+<a class=\"brand\" href=\"{root}index.html\"><img src=\"{root}logo.png\" alt=\"\" width=\"28\" height=\"28\">{esc(site.title)}</a>
+<nav class=\"main-nav\"><a href=\"{root}stones/index.html\"{all}>모든 stone</a><a href=\"{root}index.html#사용하기\">사용하기</a><a href=\"{root}index.html#publish-하기\">publish 하기</a><a href=\"{esc(site.docs)}\">문서 ↗</a></nav>
+{search}
+</header>
+<main>
+{body}
+</main>
+<footer>
+<p><a href=\"{esc(site.docs)}\">rok 문서</a> · <a href=\"{esc(site.index_repo)}\">레지스트리 인덱스</a></p>
+<p>이 사이트는 rok 으로 작성한 정적 사이트 생성기로 만들었습니다.</p>
+</footer>
+<script src=\"{root}search.js\" defer></script>
+</body>
+</html>
+"
+}
+
+// ---- pieces ----
+
+/// `<li>` of a stone in a list, linking from `out`.
+fn stone_item(out: str, s: Stone, note: str) -> str {
+    let href = esc(root_of(out) + stone_out(s.name));
+    let desc = if s.desc.is_empty() { "" } else { f"<span class=\"desc\">{esc(s.desc)}</span>" };
+    let side = if note.is_empty() { "" } else { f"<span class=\"note\">{esc(note)}</span>" };
+    f"<li><a href=\"{href}\"><span class=\"name\">{esc(s.name)}</span> <span class=\"ver\">{esc(s.latest.vers)}</span>{side}{desc}</a></li>"
+}
+
+fn stone_list(out: str, xs: List<Stone>, notes: List<str>, empty: str) -> str {
+    if xs.len() == 0 { return f"<p class=\"empty\">{esc(empty)}</p>"; }
+    let b = StrBuf::new();
+    b.push_str("<ul class=\"stones\">");
+    for k in 0..xs.len() { b.push_str(stone_item(out, xs[k], notes[k])); }
+    b.push_str("</ul>");
+    b.to_str()
+}
+
+fn code(lang: str, body: str) -> str {
+    let c = if lang == "rokon" { highlight::rok(body) } else { esc(body) };
+    f"<pre><code class=\"language-{lang}\">{c}</code></pre>"
+}
+
+// ---- landing ----
+
+pub fn landing(site: Site, all: List<Stone>, guide: str) -> str {
+    let out = "index.html";
+    let vers = 0usize;
+    for s in all { vers += s.versions.len(); }
+
+    let recent: List<Stone> = List::new();
+    for s in all { recent.push(s); }
+    recent.sort_by(|a: Stone, b: Stone| if a.time != b.time { b.time.cmp(a.time) } else { a.name.cmp(b.name) });
+    let popular: List<Stone> = List::new();
+    for s in all {
+        if s.rdeps.len() > 0 { popular.push(s); }
+    }
+    popular.sort_by(|a: Stone, b: Stone| if a.rdeps.len() != b.rdeps.len() { b.rdeps.len().cmp(a.rdeps.len()) } else { a.name.cmp(b.name) });
+
+    let rs: List<Stone> = List::new();
+    let rn: List<str> = List::new();
+    for s in recent {
+        if rs.len() == 8 { break; }
+        rs.push(s);
+        rn.push(s.date);
+    }
+    let ps: List<Stone> = List::new();
+    let pn: List<str> = List::new();
+    for s in popular {
+        if ps.len() == 8 { break; }
+        ps.push(s);
+        pn.push(f"{s.rdeps.len()} 개가 의존");
+    }
+
+    f"<div class=\"hero\">
+<img src=\"logo.png\" alt=\"\" width=\"80\" height=\"80\">
+<h1>{esc(site.title)}</h1>
+<p class=\"lead\">{esc(site.tagline)}</p>
+{search_box(true)}
+<p class=\"stats\">stone <strong>{all.len()}</strong> 개 · 버전 <strong>{vers}</strong> 개 · <a href=\"stones/index.html\">모두 보기</a></p>
+</div>
+<div class=\"columns\">
+<section><h2>최근 publish</h2>{stone_list(out, rs, rn, "아직 publish 된 stone 이 없습니다.")}</section>
+<section><h2>가장 많이 의존하는</h2>{stone_list(out, ps, pn, "아직 다른 stone 이 의존하는 stone 이 없습니다.")}</section>
+</div>
+<article>
+{guide}</article>
+"
+}
+
+// ---- stone list ----
+
+pub fn all_stones(all: List<Stone>) -> str {
+    let out = "stones/index.html";
+    let notes: List<str> = List::new();
+    for s in all { notes.push(s.date); }
+    f"<article><h1>모든 stone</h1><p>{all.len()} 개, 이름 순.</p></article>
+{stone_list(out, all, notes, "아직 publish 된 stone 이 없습니다.")}
+"
+}
+
+// ---- stone page ----
+
+fn dep_list(out: str, have: Set<str>, deps: List<stones::Req>, kind: str) -> str {
+    let b = StrBuf::new();
+    for d in deps {
+        if d.kind != kind { continue; }
+        let name = if !d.registry.is_empty() {
+            f"{esc(d.name)} <small title=\"{esc(d.registry)}\">다른 인덱스</small>"
+        } else if have.contains(d.name) {
+            f"<a href=\"{esc(root_of(out) + stone_out(d.name))}\">{esc(d.name)}</a>"
+        } else {
+            f"{esc(d.name)} <small>인덱스에 없음</small>"
+        };
+        b.push_str(f"<li>{name} <code>{esc(d.req)}</code></li>");
+    }
+    if b.is_empty() { "" } else { f"<ul class=\"deps\">{b.to_str()}</ul>" }
+}
+
+fn version_row(v: Version, latest: str) -> str {
+    let tags = StrBuf::new();
+    if v.vers == latest { tags.push_str(" <span class=\"tag\">최신</span>"); }
+    if v.yanked { tags.push_str(" <span class=\"tag yanked\">yanked</span>"); }
+    if stones::is_pre(v.vers) { tags.push_str(" <span class=\"tag\">pre-release</span>"); }
+    let tree = stones::tree_link(v.url, v.rev);
+    let commit = if tree.is_empty() {
+        f"<code>{short(v.rev)}</code>"
+    } else {
+        f"<a href=\"{esc(tree)}\"><code>{short(v.rev)}</code></a>"
+    };
+    let cls = if v.yanked { " class=\"yanked\"" } else { "" };
+    f"<li{cls}><span class=\"v\">{esc(v.vers)}</span>{tags.to_str()}<span class=\"commit\">{commit}</span></li>"
+}
+
+pub fn stone_page(site: Site, s: Stone, have: Set<str>) -> str {
+    let out = stone_out(s.name);
+    let l = s.latest;
+    let req = stones::caret(l.vers);
+    let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
+    let add = if stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
+
+    let notice = if l.yanked { "<p class=\"warn\">모든 버전이 yanked 상태입니다. 새 프로젝트에서는 해소되지 않습니다.</p>" } else { "" };
+    let readme = if s.readme.is_empty() {
+        "<p class=\"empty\">README 를 가져오지 못했습니다 (오프라인이거나 저장소에 README 가 없음).</p>"
+    } else {
+        s.readme
+    };
+
+    let deps = dep_list(out, have, l.deps, "normal");
+    let dev = dep_list(out, have, l.deps, "dev");
+    let rd = StrBuf::new();
+    for r in s.rdeps {
+        rd.push_str(f"<li><a href=\"{esc(root_of(out) + stone_out(r.name))}\">{esc(r.name)}</a> <code>{esc(r.req)}</code></li>");
+    }
+    let rdeps = if rd.is_empty() { "<p class=\"empty\">없음</p>" } else { f"<ul class=\"deps\">{rd.to_str()}</ul>" };
+
+    let vs = StrBuf::new();
+    let sorted: List<Version> = List::new();
+    for v in s.versions { sorted.push(v); }
+    sorted.sort_by(|a: Version, b: Version| stones::cmp_vers(b.vers, a.vers));
+    for v in sorted { vs.push_str(version_row(v, l.vers)); }
+
+    let tree = stones::tree_link(l.url, l.rev);
+    let repo = stones::web_of(l.url);
+    let repo_html = if repo.is_empty() { f"<code>{esc(l.url)}</code>" } else { f"<a href=\"{esc(repo)}\">{esc(l.url)}</a>" };
+    let commit = if tree.is_empty() { f"<code>{short(l.rev)}</code>" } else { f"<a href=\"{esc(tree)}\"><code>{short(l.rev)}</code></a>" };
+    let date = if s.date.is_empty() { "" } else { f"<dt>마지막 publish</dt><dd>{esc(s.date)}</dd>" };
+
+    f"<div class=\"stone-head\">
+<h1>{esc(s.name)} <span class=\"ver\">{esc(l.vers)}</span></h1>
+{notice}</div>
+<div class=\"stone\">
+<aside class=\"meta\">
+<section><h2>설치</h2>{code("sh", add)}<p>또는 <code>rok.rokon</code> 에:</p>{code("rokon", manifest)}</section>
+<section><h2>소스</h2><dl><dt>저장소</dt><dd>{repo_html}</dd><dt>커밋</dt><dd>{commit}</dd><dt>tree hash</dt><dd><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{date}<dt>인덱스 파일</dt><dd><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\"><code>{esc(s.file)}</code></a></dd></dl></section>
+<section><h2>의존 ({l.vers})</h2>{if deps.is_empty() { "<p class=\"empty\">없음</p>" } else { deps }}{if dev.is_empty() { "" } else { f"<h3>개발 의존</h3>{dev}" }}</section>
+<section><h2>이 stone 에 의존하는 stone</h2>{rdeps}</section>
+<section><h2>버전 ({s.versions.len()})</h2><ul class=\"versions\">{vs.to_str()}</ul></section>
+</aside>
+<article class=\"readme\">
+{readme}</article>
+</div>
+"
+}

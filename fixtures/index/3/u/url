@@ -1,0 +1,1 @@
+Stone { name: "url", vers: "1.0.0", deps: [], source: Dep::git("https://github.com/rokstones-demo/url", rev: "d902c3d4cc8b332379e46ecfa71742f1ad6b3c23"), cksum: "a1a8a26b0d9f67d989b0c48d0f5beefb700cf044", yanked: false }

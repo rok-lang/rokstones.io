@@ -1,0 +1,5 @@
+Stone { name: "num", vers: "1.0.0", deps: [], source: Dep::git("https://github.com/rokstones-demo/num", rev: "dac4e93fa3a042cdf363bb940fcda6cee36f4768"), cksum: "1e4b74091fcd225b2a285e1bccc2c7582dfe3d11", yanked: false }
+Stone { name: "num", vers: "1.1.0", deps: [], source: Dep::git("https://github.com/rokstones-demo/num", rev: "f8ba316207a9f8e6b8699800354c45030a5ba098"), cksum: "2c486c1edced9839679b69f5f4c6f64fb06b651f", yanked: false }
+Stone { name: "num", vers: "1.2.0", deps: [], source: Dep::git("https://github.com/rokstones-demo/num", rev: "c621864c0db66012ef04e6648f874230ea3cbba8"), cksum: "b1c244cb12c75a8dda4b7b227c2042f2088c8e97", yanked: false }
+Stone { name: "num", vers: "1.2.1", deps: [], source: Dep::git("https://github.com/rokstones-demo/num", rev: "ebca4f7ef2a7375cbef4d64f3d1e10dc25ec2b08"), cksum: "6d2491b1ab4f5375446ba9b3d4dc6e324f880eae", yanked: true }
+Stone { name: "num", vers: "2.0.0-beta.1", deps: [], source: Dep::git("https://github.com/rokstones-demo/num", rev: "041bb633ab1fef712fd9989d6e10bbc57feabd41"), cksum: "9e5725eda562c9af709b67ad0427e1f7f2924259", yanked: false }

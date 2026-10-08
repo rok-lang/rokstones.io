@@ -1,0 +1,149 @@
+// Syntax highlighting for ```rok / ```rokon blocks: keywords, types,
+// strings, chars, numbers, comments and attributes, as `<span class>`.
+
+const KEYWORDS: [str; 47] = [
+    "let", "fn", "if", "else", "match", "while", "loop", "for", "return", "break", "continue",
+    "try", "throw", "async", "await", "yield", "unsafe", "using", "struct", "enum", "trait",
+    "impl", "pub", "mod", "use", "as", "is", "ref", "true", "false", "none", "self", "Self",
+    "type", "any", "in", "where", "throws", "rethrows", "catch", "finally", "const", "static",
+    "extern", "mut", "union", "pkg",
+];
+
+const TYPES: [str; 19] = [
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+    "f32", "f64", "bool", "char", "str", "int", "float",
+];
+
+fn is_keyword(w: str) -> bool {
+    for k in KEYWORDS {
+        if k == w { return true; }
+    }
+    false
+}
+
+fn is_type(w: str) -> bool {
+    for k in TYPES {
+        if k == w { return true; }
+    }
+    let c = w.chars().next() ?? 'a';
+    c.is_uppercase()
+}
+
+fn is_ident(c: char) -> bool { c.is_alphanumeric() || c == '_' }
+
+fn esc_into(out: StrBuf, c: char) {
+    if c == '&' {
+        out.push_str("&amp;");
+    } else if c == '<' {
+        out.push_str("&lt;");
+    } else if c == '>' {
+        out.push_str("&gt;");
+    } else {
+        out.push(c);
+    }
+}
+
+fn emit(out: StrBuf, cls: str, cs: List<char>, a: usize, b: usize) {
+    out.push_str(f"<span class=\"{cls}\">");
+    for k in a..b { esc_into(out, cs[k]); }
+    out.push_str("</span>");
+}
+
+/// End of the quoted literal starting at `i` (`"` or `'`).
+fn quote_end(cs: List<char>, i: usize, q: char) -> usize {
+    let k = i + 1;
+    while k < cs.len() {
+        let c = cs[k];
+        if c == '\\' {
+            k += 2;
+            continue;
+        }
+        if c == q { return k + 1; }
+        if c == '\n' && q == '\'' { return k; }
+        k += 1;
+    }
+    cs.len()
+}
+
+pub fn rok(src: str) -> str {
+    let cs: List<char> = List::new();
+    for c in src.chars() { cs.push(c); }
+    let n = cs.len();
+    let out = StrBuf::with_capacity(src.len() * 2);
+    let i = 0usize;
+    while i < n {
+        let c = cs[i];
+        let nx = if i + 1 < n { cs[i + 1] } else { ' ' };
+        if c == '/' && nx == '/' {
+            let k = i;
+            while k < n && cs[k] != '\n' { k += 1; }
+            emit(out, "c", cs, i, k);
+            i = k;
+        } else if c == '/' && nx == '*' {
+            let k = i + 2;
+            while k + 1 < n && !(cs[k] == '*' && cs[k + 1] == '/') { k += 1; }
+            k = if k + 2 <= n { k + 2 } else { n };
+            emit(out, "c", cs, i, k);
+            i = k;
+        } else if c == '"' {
+            let k = quote_end(cs, i, '"');
+            emit(out, "s", cs, i, k);
+            i = k;
+        } else if c == '\'' {
+            // A char literal is short; anything else is plain text.
+            let k = quote_end(cs, i, '\'');
+            if k <= i + 12 && k > i + 2 && cs[k - 1] == '\'' {
+                emit(out, "s", cs, i, k);
+                i = k;
+            } else {
+                out.push(c);
+                i += 1;
+            }
+        } else if c == '#' && (nx == '[' || nx == '!') {
+            let k = i;
+            let depth = 0;
+            while k < n && cs[k] != '\n' {
+                if cs[k] == '[' { depth += 1; }
+                if cs[k] == ']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        k += 1;
+                        break;
+                    }
+                }
+                k += 1;
+            }
+            emit(out, "a", cs, i, k);
+            i = k;
+        } else if c.is_ascii_digit() {
+            let k = i;
+            while k < n && (is_ident(cs[k]) || (cs[k] == '.' && k + 1 < n && cs[k + 1].is_ascii_digit())) { k += 1; }
+            emit(out, "n", cs, i, k);
+            i = k;
+        } else if is_ident(c) {
+            let k = i;
+            while k < n && is_ident(cs[k]) { k += 1; }
+            let w = StrBuf::new();
+            for j in i..k { w.push(cs[j]); }
+            let word = w.to_str();
+            if k < n && cs[k] == '"' && (word == "f" || word == "r" || word == "b") {
+                let e = quote_end(cs, k, '"');
+                emit(out, "s", cs, i, e);
+                i = e;
+            } else {
+                if is_keyword(word) {
+                    emit(out, "k", cs, i, k);
+                } else if is_type(word) {
+                    emit(out, "t", cs, i, k);
+                } else {
+                    out.push_str(word);
+                }
+                i = k;
+            }
+        } else {
+            esc_into(out, c);
+            i += 1;
+        }
+    }
+    out.to_str()
+}

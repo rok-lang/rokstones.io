@@ -1,0 +1,2 @@
+Stone { name: "rx", vers: "0.0.1", deps: [{ name: "num", req: "^1.0", kind: "normal" }], source: Dep::git("https://github.com/rokstones-demo/rx", rev: "56460c8236e5b6a1252c835f19b6cfa8f895d139"), cksum: "ce08050372feb071a1eb194defa7aa70d283a08f", yanked: false }
+Stone { name: "rx", vers: "0.0.2", deps: [{ name: "num", req: "^1.2", kind: "normal" }, { name: "json", req: "^0.4", kind: "normal" }], source: Dep::git("https://github.com/rokstones-demo/rx", rev: "e14e4e97b751b80ee9477040eabb1e008cd60a12"), cksum: "547675ee6e57ac949a90864497f5194a08111194", yanked: false }
