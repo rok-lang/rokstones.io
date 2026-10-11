@@ -1,6 +1,6 @@
 # num
 
-큰 정수, 유리수, 복소수와 수 이론 함수 (`gcd`, `lcm`, `is_prime`) 를 모은 stone 입니다.
+Big integers, rationals, complex numbers, and number-theory functions (`gcd`, `lcm`, `is_prime`).
 
 > [!NOTE]
-> 2.0 은 베타입니다. `^1.2` 를 권합니다.
+> 2.0 is in beta. `^1.2` is recommended.

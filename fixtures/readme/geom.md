@@ -1,8 +1,8 @@
 # geom
 
-2차원 기하 도형과 넓이, 둘레, 교차 판정을 제공하는 작은 stone 입니다. 수 연산은 [num](https://rokstones.io/stones/num.html) 을 씁니다.
+A small stone for 2D shapes: area, perimeter, and intersection tests. Numeric operations use [num](https://rokstones.io/stones/num.html).
 
-## 사용
+## Usage
 
 ```rok
 use geom::{Shape, area};
@@ -13,13 +13,13 @@ fn main() {
 }
 ```
 
-## 문서
+## Docs
 
-- [변경 기록](CHANGELOG.md)
-- [예제 디렉토리](./examples/)
+- [Changelog](CHANGELOG.md)
+- [Examples directory](./examples/)
 
-![도형 그림](docs/shapes.png)
+![Shapes diagram](docs/shapes.png)
 
-<div onclick="alert(1)">이 줄은 HTML 이 아니라 글자로 보여야 합니다.</div>
+<div onclick="alert(1)">This line must show as text, not HTML.</div>
 
-[이상한 링크](javascript:alert(1))
+[Suspicious link](javascript:alert(1))

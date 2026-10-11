@@ -7,7 +7,7 @@ use rok::std::rokon;
 use rok::std::rokon::Value;
 use rok::std::process::Command;
 use rok::core::cmp::Ordering;
-use pkg::markdown;
+use pkg::layout;
 
 pub struct Req {
     pub name: str;
@@ -211,11 +211,11 @@ pub struct LineError {
 }
 
 impl Display for LineError {
-    fn display(self) -> str { self.msg }
+    fn fmt(self, ref f: Formatter) throws (FmtError) { try f.write_str(self.msg) }
 }
 
 impl Debug for LineError {
-    fn debug(self) -> str { f"LineError({self.msg})" }
+    fn fmt(self, ref f: Formatter) throws (FmtError) { try f.write_str(f"LineError({self.msg})") }
 }
 
 impl Error for LineError {}
@@ -373,7 +373,7 @@ fn first_para(html: str, n: usize) -> str {
     if a == html.len() { return ""; }
     let rest = html[a + 3:];
     let b = rest.find("</p>") ?? rest.len();
-    let t = markdown::strip_tags(rest[:b]).replace("\n", " ").trim();
+    let t = rok_markdown::strip_tags(rest[:b]).replace("\n", " ").trim();
     if t.char_count() <= n { return t; }
     let out = StrBuf::new();
     let k = 0usize;
@@ -448,7 +448,7 @@ pub fn load(dir: str, r: Readmes) -> Index {
         let html = "";
         let text = readme_text(r, k, l.url, l.rev);
         if !text.is_empty() {
-            let doc = markdown::render_untrusted(text, |h| repo_link(l.url, l.rev, h));
+            let doc = rok_markdown::render_untrusted(text, layout::md(|h| repo_link(l.url, l.rev, h)));
             html = doc.html;
         }
         let (t, d) = dates.get(files[k]) ?? (0i64, "");

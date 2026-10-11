@@ -1,5 +1,8 @@
 Package {
     name: "rokstones_io",
     version: "0.1.0",
-    deps: {},
+    deps: {
+        "rok-markdown": Dep::path("../stones/rok-markdown"),
+        "rok-syntax": Dep::path("../stones/rok-syntax"),
+    },
 }

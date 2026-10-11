@@ -56,7 +56,7 @@
       if (!hits.length) {
         const li = document.createElement("li");
         li.className = "empty";
-        li.textContent = data.length ? "결과 없음" : "아직 publish 된 stone 이 없습니다";
+        li.textContent = data.length ? "No results" : "No stones published yet";
         box.append(li);
       }
       box.hidden = false;

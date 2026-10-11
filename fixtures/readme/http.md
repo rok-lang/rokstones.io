@@ -1,6 +1,6 @@
 # http
 
-`rok::std::net` 위에 만든 HTTP/1.1 클라이언트와 서버입니다.
+An HTTP/1.1 client and server built on `rok::std::net`.
 
 ```rok
 fn main() throws {

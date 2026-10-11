@@ -1,6 +1,6 @@
 # json
 
-JSON 문서를 읽고 쓰는 stone 입니다. `#[derive(Json)]` 으로 struct 와 enum 을 그대로 변환합니다.
+A stone for reading and writing JSON documents. `#[derive(Json)]` converts structs and enums directly.
 
 ```rok
 use json;
@@ -14,7 +14,7 @@ fn main() throws {
 }
 ```
 
-| 함수 | 뜻 |
-|------|----|
-| `from_str` | 문자열에서 값으로 |
-| `to_string` | 값에서 한 줄 문자열로 |
+| Function | Meaning |
+|----------|---------|
+| `from_str` | String to value |
+| `to_string` | Value to a one-line string |
