@@ -6,9 +6,14 @@
 //   rok run -- --demo            use fixtures/index and fixtures/readme
 //   rok run -- --offline         no `git fetch` for READMEs (cache only)
 //   rok run -- --index <dir>     another index checkout
+//   rok run -- serve             serve the site and the API (see server.rok)
 
 mod layout;
 mod stones;
+mod secret;
+mod http;
+mod index;
+mod server;
 
 use rok::std::env;
 use rok::std::fs;
@@ -160,6 +165,11 @@ fn check(files: Dict<str, str>, statics: Set<str>) -> List<str> {
 fn main() throws {
     let t0 = Instant::now();
     let args = env::args();
+    if args.len() == 2 && args[1] == "serve" {
+        let site: Site = try rokon::from_str(try fs::read_to_str("site.rokon"));
+        try server::serve(site);
+        return;
+    }
     let strict = false;
     let demo = false;
     let offline = false;
@@ -216,7 +226,8 @@ fn main() throws {
     }
     sx.push_str("]\n");
 
-    let out_root = site.out;
+    // Built beside the old site, then swapped in: `serve` keeps serving.
+    let out_root = site.out + ".new";
     if fs::exists(out_root) { try fs::remove_dir_all(out_root); }
     for out in files.keys() { try write(out_root, out, files[out]); }
     try write(out_root, "search-index.json", sx.to_str());
@@ -229,6 +240,13 @@ fn main() throws {
         try fs::copy(e.path(), out_root + "/" + name);
         statics.insert(name);
     }
+
+    let old = site.out + ".old";
+    if fs::exists(old) { try fs::remove_dir_all(old); }
+    if fs::exists(site.out) { try fs::rename(site.out, old); }
+    try fs::rename(out_root, site.out);
+    if fs::exists(old) { try fs::remove_dir_all(old); }
+    out_root = site.out;
 
     let bad = check(files, statics);
     for b in bad { eprintln(f"broken link: {b}"); }

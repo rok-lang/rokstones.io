@@ -1,0 +1,760 @@
+// `serve`: the site in `public/`, GitHub login, publish tokens and the
+// publish / yank API over plain HTTP (TLS ends at a reverse proxy).
+//
+// One thread per connection. Everything that reads or writes the data
+// file or the index holds `LOCK`, so writes are serialized. After an
+// index commit `STALE` is set and a background thread rebuilds the site
+// by running this program again.
+
+use rok::std::env;
+use rok::std::fs;
+use rok::std::net;
+use rok::std::net::TcpStream;
+use rok::std::rokon;
+use rok::std::rokon::Value;
+use rok::std::rokon::write;
+use rok::std::process::{Command, Stdio, ChildStdin, ChildStdout};
+use rok::std::thread;
+use rok::std::time::{Duration, SystemTime};
+use rok::core::task::time::Instant;
+use rok_markdown::esc;
+use pkg::Site;
+use pkg::layout;
+use pkg::http;
+use pkg::http::Request;
+use pkg::index;
+use pkg::index::ApiError;
+use pkg::secret;
+
+static LOCK: Mutex<i32> = Mutex::new(0);
+static STALE: Atomic<i32> = Atomic::new(0);
+static ACTIVE: Atomic<i32> = Atomic::new(0);
+
+const MAX_CONNS: i32 = 256;
+const SESSION_SECS: i64 = 2592000;
+const MAX_TOKENS: usize = 20;
+
+// ---- configuration ----
+
+/// Settings from the environment, then `.env`.
+pub struct Cfg {
+    /// Public base URL, no trailing `/`.
+    pub url: str;
+    pub addr: str;
+    pub client_id: str;
+    pub client_secret: str;
+    /// `,a,b,` (lowercase GitHub logins).
+    pub admins: str;
+    pub data: str;
+    pub index: str;
+    pub oauth: str;
+    pub api: str;
+}
+
+/// `KEY=value` lines; `#` comments, blank lines, `export ` and one pair
+/// of matching quotes around the value allowed.
+pub fn parse_env(text: str) -> Dict<str, str> {
+    let out: Dict<str, str> = Dict::new();
+    for raw in text.split("\n") {
+        let l = raw.trim();
+        if l.is_empty() || l.starts_with("#") { continue; }
+        l = l.strip_prefix("export ") ?? l;
+        let (k, v) = l.split_once("=") ?? ("", "");
+        let key = k.trim();
+        if key.is_empty() { continue; }
+        let val = v.trim();
+        if val.len() >= 2 && ((val.starts_with("\"") && val.ends_with("\"")) || (val.starts_with("'") && val.ends_with("'"))) {
+            val = val[1:val.len() - 1];
+        }
+        out.insert(key, val);
+    }
+    out
+}
+
+fn setting(file: Dict<str, str>, k: str, dflt: str) throws -> str {
+    let v = try env::var(k) catch _ { file.get(k) ?? dflt };
+    if v.is_empty() { throw ApiError { status: 0, msg: f"{k} is not set (environment or .env)" }; }
+    v
+}
+
+pub fn load_cfg(path: str) throws -> Cfg {
+    let text = if fs::exists(path) { try fs::read_to_str(path) } else { "" };
+    let f = parse_env(text);
+    let admins = StrBuf::new();
+    admins.push(',');
+    for a in (try env::var("ROKSTONES_ADMINS") catch _ { f.get("ROKSTONES_ADMINS") ?? "" }).split(",") {
+        let t = a.trim().to_lowercase();
+        if !t.is_empty() { admins.push_str(t + ","); }
+    }
+    let url = try setting(f, "ROKSTONES_URL", "");
+    Cfg {
+        url: url.strip_suffix("/") ?? url,
+        addr: try setting(f, "ROKSTONES_ADDR", "127.0.0.1:8080"),
+        client_id: try setting(f, "GITHUB_CLIENT_ID", ""),
+        client_secret: try setting(f, "GITHUB_CLIENT_SECRET", ""),
+        admins: admins.to_str(),
+        data: try setting(f, "ROKSTONES_DATA", ""),
+        index: try setting(f, "ROKSTONES_INDEX", ""),
+        oauth: try setting(f, "GITHUB_OAUTH_URL", "https://github.com"),
+        api: try setting(f, "GITHUB_API_URL", "https://api.github.com"),
+    }
+}
+
+pub fn is_admin(cfg: Cfg, login: str) -> bool {
+    !login.is_empty() && cfg.admins.contains("," + login.to_lowercase() + ",")
+}
+
+// ---- the data file ----
+
+#[derive(Rokon)]
+pub struct Account {
+    /// GitHub's numeric user id.
+    pub id: i64;
+    pub login: str;
+    pub created: i64;
+}
+
+#[derive(Rokon)]
+pub struct Session {
+    /// SHA-256 of the cookie value.
+    pub hash: str;
+    pub account: i64;
+    pub csrf: str;
+    pub expires: i64;
+}
+
+#[derive(Rokon)]
+pub struct Token {
+    pub id: str;
+    pub name: str;
+    pub account: i64;
+    /// SHA-256 of the token.
+    pub hash: str;
+    pub created: i64;
+    pub last_used: i64;
+}
+
+/// Who may publish a package: `name` is `index::key`, `native/` prefixed
+/// for native packages.
+#[derive(Rokon)]
+pub struct Owner {
+    pub name: str;
+    pub accounts: List<i64>;
+}
+
+#[derive(Rokon)]
+pub struct Db {
+    pub accounts: List<Account>;
+    pub sessions: List<Session>;
+    pub tokens: List<Token>;
+    pub owners: List<Owner>;
+}
+
+fn db_path(cfg: Cfg) -> str { cfg.data + "/db.rokon" }
+
+fn load_db(cfg: Cfg) throws -> Db {
+    let p = db_path(cfg);
+    if !fs::exists(p) { return Db { accounts: List::new(), sessions: List::new(), tokens: List::new(), owners: List::new() }; }
+    try rokon::from_str(try fs::read_to_str(p))
+}
+
+fn save_db(cfg: Cfg, db: Db) throws {
+    let now = now_secs();
+    let live: List<Session> = List::new();
+    for s in db.sessions {
+        if s.expires > now { live.push(s); }
+    }
+    db.sessions = live;
+    try fs::write_atomic(db_path(cfg), rokon::to_string(db) + "\n");
+}
+
+fn now_secs() -> i64 { try SystemTime::now().unix_seconds() catch _ { 0i64 } }
+
+fn account(db: Db, id: i64) -> Account | none {
+    for a in db.accounts {
+        if a.id == id { return a; }
+    }
+    none
+}
+
+/// The live session a request's cookie names.
+fn session_of(db: Db, r: Request) -> Session | none {
+    let c = http::cookie(r, "rks_session");
+    if c.is_empty() { return none; }
+    let h = secret::sha256_hex(c);
+    let now = now_secs();
+    for s in db.sessions {
+        if secret::same(s.hash, h) && s.expires > now { return s; }
+    }
+    none
+}
+
+/// The token `t` (`rks_` + 64 hex), checked against every stored hash.
+fn token_of(db: Db, t: str) -> Token | none {
+    if !t.starts_with("rks_") || t.len() != 68 { return none; }
+    let h = secret::sha256_hex(t);
+    let found: Token | none = none;
+    for k in db.tokens {
+        if secret::same(k.hash, h) { found = k; }
+    }
+    found
+}
+
+/// The first publisher owns a name; a name already in the index with no
+/// owner on record (published before this server) is the admins'.
+pub fn may_publish(owners: List<i64> | none, in_index: bool, id: i64, admin: bool) -> bool {
+    if admin { return true; }
+    if let o: List<i64> = owners { return o.contains(id); }
+    !in_index
+}
+
+fn owners_of(db: Db, k: str) -> List<i64> | none {
+    for o in db.owners {
+        if o.name == k { return o.accounts; }
+    }
+    none
+}
+
+// ---- responses ----
+
+pub struct Resp {
+    pub status: i32;
+    pub headers: List<str>;
+    pub body: str;
+    /// A static file sent as the body instead; `""`: none.
+    pub file: str;
+}
+
+fn html(status: i32, body: str) -> Resp {
+    Resp {
+        status: status,
+        headers: [
+            "Content-Type: text/html; charset=utf-8",
+            "Cache-Control: no-store",
+            "X-Frame-Options: DENY",
+            "Referrer-Policy: same-origin",
+            "Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; form-action 'self'",
+        ],
+        body: body,
+        file: "",
+    }
+}
+
+fn redirect(to: str, cookies: List<str>) -> Resp {
+    let h: List<str> = [f"Location: {to}", "Cache-Control: no-store"];
+    for c in cookies { h.push("Set-Cookie: " + c); }
+    Resp { status: 303, headers: h, body: "", file: "" }
+}
+
+fn rokon_resp(status: i32, name: str, fields: List<(str, Value)>) -> Resp {
+    let f: OrderedDict<str, Value> = OrderedDict::new();
+    for (k, v) in fields { f.insert(k, v); }
+    Resp {
+        status: status,
+        headers: ["Content-Type: application/rokon; charset=utf-8", "Cache-Control: no-store"],
+        body: write::flat(Value::Struct { name: name, fields: f }) + "\n",
+        file: "",
+    }
+}
+
+fn api_error(status: i32, msg: str) -> Resp { rokon_resp(status, "Error", [("message", Value::Str(msg))]) }
+
+fn cookie(name: str, value: str, max_age: i64) -> str {
+    f"{name}={value}; Path=/; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax"
+}
+
+/// `YYYY-MM-DD` (UTC) of a unix time.
+pub fn date(t: i64) -> str {
+    if t <= 0i64 { return "never"; }
+    let z = t / 86400i64 + 719468i64;
+    let era = z / 146097i64;
+    let doe = z - era * 146097i64;
+    let yoe = (doe - doe / 1460i64 + doe / 36524i64 - doe / 146096i64) / 365i64;
+    let doy = doe - (365i64 * yoe + yoe / 4i64 - yoe / 100i64);
+    let mp = (5i64 * doy + 2i64) / 153i64;
+    let d = doy - (153i64 * mp + 2i64) / 5i64 + 1i64;
+    let m = if mp < 10i64 { mp + 3i64 } else { mp - 9i64 };
+    let y = yoe + era * 400i64 + (if m <= 2i64 { 1i64 } else { 0i64 });
+    let p2 = |x: i64| if x < 10i64 { f"0{x}" } else { f"{x}" };
+    f"{y}-{p2(m)}-{p2(d)}"
+}
+
+fn page(site: Site, path: str, title: str, body: str, status: i32) -> Resp {
+    html(status, layout::page(site, path[1:], title, f"<article class=\"doc account\">\n{body}\n</article>"))
+}
+
+fn message(site: Site, path: str, status: i32, title: str, text: str) -> Resp {
+    page(site, path, title, f"<h1>{esc(title)}</h1>\n<p>{esc(text)}</p>\n<p><a href=\"/\">Home</a></p>", status)
+}
+
+// ---- GitHub ----
+
+/// A curl config value, quoted.
+fn cq(s: str) -> str {
+    if s.contains("\n") || s.contains("\r") { panic("newline in a curl config value"); }
+    "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
+/// Run `curl` with `config` on stdin (secrets never reach argv); its stdout.
+fn curl(config: str) throws (ApiError) -> str {
+    let c = try Command::new("curl").args(["--config", "-"]).stdin(Stdio::Piped).stdout(Stdio::Piped).stderr(Stdio::Null).spawn() catch e {
+        throw index::err(502, f"cannot run curl: {e}");
+    };
+    let full = config + "silent\nshow-error\nfail\nmax-time = 20\n";
+    let w = c.stdin;
+    if w is ChildStdin {
+        try w.write_str(full) catch _ {};
+        try w.close() catch _ {};
+    }
+    let out = "";
+    let rd = c.stdout;
+    if rd is ChildStdout {
+        out = try str::from_utf8(try rd.read_to_end() catch _ { List::<u8>::new() }) catch _ { "" };
+        try rd.close() catch _ {};
+    }
+    let st = try c.wait() catch _ { throw index::err(502, "GitHub did not answer"); };
+    if !st.success() { throw index::err(502, "GitHub did not answer"); }
+    out
+}
+
+/// Top-level scalar members of a JSON object, as text (strings decoded;
+/// numbers, `true`, `false`, `null` as written). Nested values skipped.
+pub fn json_fields(s: str) -> Dict<str, str> {
+    let out: Dict<str, str> = Dict::new();
+    let cs: List<char> = List::new();
+    for c in s.chars() { cs.push(c); }
+    let n = cs.len();
+    let i = 0usize;
+    let skip_ws = |k: usize| {
+        let j = k;
+        while j < n && (cs[j] == ' ' || cs[j] == '\n' || cs[j] == '\r' || cs[j] == '\t') { j += 1; }
+        j
+    };
+    // A string starting at `k` (its quote): text, index after it.
+    let read_str = |k: usize| {
+        let b = StrBuf::new();
+        let j = k + 1;
+        while j < n && cs[j] != '"' {
+            if cs[j] == '\\' && j + 1 < n {
+                j += 1;
+                let e = cs[j];
+                if e == 'n' { b.push('\n'); } else if e == 't' { b.push('\t'); } else if e == 'r' { b.push('\r'); } else if e == 'b' || e == 'f' { b.push(' '); } else if e == 'u' && j + 4 < n {
+                    let code = 0u32;
+                    for q in 1usize..5usize { code = code * 16u32 + (try cs[j + q].to_digit(16u32) catch _ { 0u32 }); }
+                    b.push(char::from_u32(code) ?? '\u{fffd}');
+                    j += 4;
+                } else { b.push(e); }
+            } else {
+                b.push(cs[j]);
+            }
+            j += 1;
+        }
+        (b.to_str(), j + 1)
+    };
+    i = skip_ws(i);
+    if i >= n || cs[i] != '{' { return out; }
+    i += 1;
+    while i < n {
+        i = skip_ws(i);
+        if i >= n || cs[i] == '}' || cs[i] != '"' { break; }
+        let (k, after) = read_str(i);
+        i = skip_ws(after);
+        if i >= n || cs[i] != ':' { break; }
+        i = skip_ws(i + 1);
+        if i >= n { break; }
+        if cs[i] == '"' {
+            let (v, a2) = read_str(i);
+            out.insert(k, v);
+            i = a2;
+        } else if cs[i] == '{' || cs[i] == '[' {
+            let depth = 0;
+            while i < n {
+                let c = cs[i];
+                if c == '"' {
+                    i = read_str(i).1;
+                    continue;
+                }
+                if c == '{' || c == '[' { depth += 1; }
+                if c == '}' || c == ']' { depth -= 1; }
+                i += 1;
+                if depth == 0 { break; }
+            }
+        } else {
+            let b = StrBuf::new();
+            while i < n && cs[i] != ',' && cs[i] != '}' && cs[i] != ' ' && cs[i] != '\n' {
+                b.push(cs[i]);
+                i += 1;
+            }
+            out.insert(k, b.to_str());
+        }
+        i = skip_ws(i);
+        if i < n && cs[i] == ',' { i += 1; }
+    }
+    out
+}
+
+fn safe_token(t: str) -> bool {
+    if t.is_empty() || t.len() > 512 { return false; }
+    for c in t.chars() {
+        if !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') { return false; }
+    }
+    true
+}
+
+/// A GitHub login: letters, digits, `-`.
+fn is_login(s: str) -> bool {
+    if s.is_empty() || s.len() > 39 { return false; }
+    for c in s.chars() {
+        if !(c.is_ascii_alphanumeric() || c == '-') { return false; }
+    }
+    true
+}
+
+/// The GitHub account behind an OAuth `code`: (id, login).
+fn github_user(cfg: Cfg, code: str) throws (ApiError) -> (i64, str) {
+    let callback = cfg.url + "/auth/github/callback";
+    let data = f"client_id={http::pct_encode(cfg.client_id)}&client_secret={http::pct_encode(cfg.client_secret)}&code={http::pct_encode(code)}&redirect_uri={http::pct_encode(callback)}";
+    let ua = "header = " + cq("User-Agent: rokstones.io") + "\n";
+    let tok = json_fields(try curl(f"url = {cq(cfg.oauth + "/login/oauth/access_token")}\n{ua}header = {cq("Accept: application/json")}\ndata = {cq(data)}\n"));
+    let access = tok.get("access_token") ?? "";
+    if !safe_token(access) { throw index::err(400, "GitHub refused the login; try again"); }
+    let user = json_fields(try curl(f"url = {cq(cfg.api + "/user")}\n{ua}header = {cq("Accept: application/vnd.github+json")}\nheader = {cq("Authorization: Bearer " + access)}\n"));
+    let id = try (user.get("id") ?? "").parse::<i64>() catch _ { throw index::err(502, "GitHub sent no user id"); };
+    let login = user.get("login") ?? "";
+    if id <= 0i64 || !is_login(login) { throw index::err(502, "GitHub sent a malformed user"); }
+    (id, login)
+}
+
+// ---- HTML routes ----
+
+fn login(cfg: Cfg) throws -> Resp {
+    let state = try secret::random_hex(16);
+    let to = f"{cfg.oauth}/login/oauth/authorize?client_id={http::pct_encode(cfg.client_id)}&redirect_uri={http::pct_encode(cfg.url + "/auth/github/callback")}&state={state}&scope=read:user";
+    redirect(to, [cookie("rks_state", state, 600i64)])
+}
+
+fn callback(cfg: Cfg, site: Site, r: Request) throws -> Resp {
+    let q = http::form(r.query);
+    let state = q.get("state") ?? "";
+    let want = http::cookie(r, "rks_state");
+    if want.is_empty() || !secret::same(state, want) {
+        return message(site, r.path, 400, "Login failed", "The login expired or did not start here. Log in again.");
+    }
+    let code = q.get("code") ?? "";
+    if code.is_empty() {
+        return message(site, r.path, 400, "Login cancelled", "GitHub did not authorize the login.");
+    }
+    let (id, login) = try github_user(cfg, code) catch e {
+        return message(site, r.path, e.status, "Login failed", e.msg);
+    };
+    let sid = try secret::random_hex(32);
+    let csrf = try secret::random_hex(16);
+    let now = now_secs();
+    let out = Resp { status: 500, headers: List::new(), body: "", file: "" };
+    using g = LOCK.lock() {
+        let db = try load_db(cfg);
+        let seen = false;
+        for a in db.accounts {
+            if a.id == id {
+                a.login = login;
+                seen = true;
+            }
+        }
+        if !seen { db.accounts.push(Account { id: id, login: login, created: now }); }
+        db.sessions.push(Session { hash: secret::sha256_hex(sid), account: id, csrf: csrf, expires: now + SESSION_SECS });
+        try save_db(cfg, db);
+        out = redirect("/me", [cookie("rks_session", sid, SESSION_SECS), cookie("rks_state", "", 0i64)]);
+    }
+    out
+}
+
+fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> Resp {
+    let a = account(db, s.account) ?? Account { id: 0i64, login: "", created: 0i64 };
+    let csrf = esc(s.csrf);
+    let b = StrBuf::new();
+    b.push_str(f"<h1>Account</h1>\n<p>Logged in with GitHub as <strong>{esc(a.login)}</strong>.</p>\n");
+    b.push_str(f"<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button type=\"submit\">Log out</button></form>\n");
+    b.push_str("<h2>Publish tokens</h2>\n");
+    if !is_admin(cfg, a.login) {
+        b.push_str("<p>Publishing is not open yet.</p>\n");
+        return page(site, path, "Account", b.to_str(), 200);
+    }
+    if !fresh.is_empty() {
+        b.push_str(f"<div class=\"callout important\"><p class=\"callout-title\">New token (shown once; copy it now)</p><pre><code>{esc(fresh)}</code></pre><p>Save it with <code>rok login</code>, which reads it from stdin.</p></div>\n");
+    }
+    let mine: List<Token> = List::new();
+    for t in db.tokens {
+        if t.account == a.id { mine.push(t); }
+    }
+    if mine.is_empty() {
+        b.push_str("<p>No tokens yet.</p>\n");
+    } else {
+        b.push_str("<table>\n<thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>\n<tbody>\n");
+        for t in mine {
+            b.push_str(f"<tr><td>{esc(t.name)}</td><td>{date(t.created)}</td><td>{date(t.last_used)}</td><td><form method=\"post\" action=\"/me/tokens/{esc(t.id)}/revoke\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button type=\"submit\">Revoke</button></form></td></tr>\n");
+        }
+        b.push_str("</tbody>\n</table>\n");
+    }
+    b.push_str(f"<form method=\"post\" action=\"/me/tokens\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><label>Name <input name=\"name\" maxlength=\"64\" required></label> <button type=\"submit\">Create token</button></form>\n");
+    page(site, path, "Account", b.to_str(), 200)
+}
+
+/// `/me`, `/logout` and `/me/tokens..`: the session's account pages.
+fn account_route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
+    let out = Resp { status: 500, headers: List::new(), body: "", file: "" };
+    using g = LOCK.lock() {
+        out = try account_locked(cfg, site, r);
+    }
+    out
+}
+
+fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
+    let db = try load_db(cfg);
+    let s = session_of(db, r) ?? Session { hash: "", account: 0i64, csrf: "", expires: 0i64 };
+    if s.hash.is_empty() {
+        return if r.method == "GET" { redirect("/login", []) } else { message(site, r.path, 401, "Not logged in", "Log in first.") };
+    }
+    if r.method == "GET" { return me_page(cfg, site, r.path, db, s, ""); }
+    if !r.header("content-type").starts_with("application/x-www-form-urlencoded") {
+        return message(site, r.path, 415, "Bad form", "Send the form from the account page.");
+    }
+    let f = http::form(r.body);
+    if !secret::same(f.get("csrf") ?? "", s.csrf) {
+        return message(site, r.path, 403, "Bad form", "The form expired; reload the account page.");
+    }
+    if r.path == "/logout" {
+        let keep: List<Session> = List::new();
+        for x in db.sessions {
+            if x.hash != s.hash { keep.push(x); }
+        }
+        db.sessions = keep;
+        try save_db(cfg, db);
+        return redirect("/", [cookie("rks_session", "", 0i64)]);
+    }
+    let a = account(db, s.account) ?? Account { id: 0i64, login: "", created: 0i64 };
+    if !is_admin(cfg, a.login) {
+        return message(site, r.path, 403, "Publishing is not open yet", "Publish tokens are not available for this account yet.");
+    }
+    if r.path == "/me/tokens" {
+        let name = (f.get("name") ?? "").trim();
+        if name.is_empty() || name.char_count() > 64 {
+            return message(site, r.path, 400, "Bad token name", "A token name is 1 to 64 characters.");
+        }
+        let n = 0usize;
+        for t in db.tokens {
+            if t.account == a.id { n += 1; }
+        }
+        if n >= MAX_TOKENS { return message(site, r.path, 400, "Too many tokens", f"Revoke one first (at most {MAX_TOKENS})."); }
+        let tok = "rks_" + try secret::random_hex(32);
+        db.tokens.push(Token { id: try secret::random_hex(8), name: name, account: a.id, hash: secret::sha256_hex(tok), created: now_secs(), last_used: 0i64 });
+        try save_db(cfg, db);
+        return me_page(cfg, site, r.path, db, s, tok);
+    }
+    // `/me/tokens/<id>/revoke`
+    let id = (r.path.strip_prefix("/me/tokens/") ?? "").strip_suffix("/revoke") ?? "";
+    let keep: List<Token> = List::new();
+    let gone = false;
+    for t in db.tokens {
+        if t.id == id && t.account == a.id { gone = true; } else { keep.push(t); }
+    }
+    if !gone { return message(site, r.path, 404, "No such token", "It was revoked already."); }
+    db.tokens = keep;
+    try save_db(cfg, db);
+    redirect("/me", [])
+}
+
+// ---- API ----
+
+#[derive(Rokon)]
+pub struct Yank {
+    pub name: str;
+    pub vers: str;
+    pub undo: bool = false;
+    pub native: bool = false;
+}
+
+fn api_route(cfg: Cfg, r: Request) -> Resp {
+    let out = api_error(500, "internal error");
+    using g = LOCK.lock() {
+        out = try api_locked(cfg, r) catch e { api_error(e.status, e.msg) };
+    }
+    out
+}
+
+fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
+    let routes: List<(str, str)> = [("GET", "/api/v1/me"), ("POST", "/api/v1/publish"), ("POST", "/api/v1/yank")];
+    let known = false;
+    for (m, p) in routes {
+        if p == r.path {
+            known = true;
+            if m != r.method { throw index::err(405, f"use {m} {p}"); }
+        }
+    }
+    if !known { throw index::err(404, "no such API route"); }
+    let db = try load_db(cfg) catch e { throw index::err(500, f"data: {e}"); };
+    let presented = r.header("authorization").strip_prefix("Bearer ") ?? "";
+    let tok = token_of(db, presented.trim()) ?? Token { id: "", name: "", account: 0i64, hash: "", created: 0i64, last_used: 0i64 };
+    if tok.id.is_empty() { throw index::err(401, "a valid token is required (Authorization: Bearer rks_..)"); }
+    let a = account(db, tok.account) ?? Account { id: 0i64, login: "", created: 0i64 };
+    let admin = is_admin(cfg, a.login);
+    tok.last_used = now_secs();
+    try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+    if r.path == "/api/v1/me" {
+        return rokon_resp(200, "Me", [("login", Value::Str(a.login)), ("publish", Value::Bool(admin))]);
+    }
+    if !admin { throw index::err(403, "Publishing is not open yet"); }
+    let who = f"{a.login} <{a.id}+{a.login}@users.noreply.github.com>";
+    try index::sync(cfg.index);
+    if r.path == "/api/v1/publish" {
+        let e = try index::parse_entry(r.body);
+        let k = (if e.native { "native/" } else { "" }) + index::key(e.name);
+        let owners = owners_of(db, k);
+        if !may_publish(owners, try index::exists(cfg.index, e.native, e.name), a.id, admin) {
+            throw index::err(403, f"`{e.name}` belongs to other accounts");
+        }
+        try index::publish(cfg.index, e, who);
+        if owners is none {
+            db.owners.push(Owner { name: k, accounts: [a.id] });
+            try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
+        }
+        STALE.store(1);
+        return rokon_resp(200, "Published", [("name", Value::Str(e.name)), ("vers", Value::Str(e.vers)), ("file", Value::Str(e.file))]);
+    }
+    let y: Yank = try rokon::from_str(r.body) catch e { throw index::err(400, f"the body is `Yank {{ name: .., vers: .., undo: false, native: false }}`: {e}"); };
+    let k = (if y.native { "native/" } else { "" }) + index::key(y.name);
+    if !may_publish(owners_of(db, k), true, a.id, admin) { throw index::err(403, f"`{y.name}` belongs to other accounts"); }
+    let changed = try index::yank(cfg.index, y.name, y.vers, !y.undo, y.native, who);
+    if changed { STALE.store(1); }
+    rokon_resp(200, "Yanked", [("name", Value::Str(y.name)), ("vers", Value::Str(y.vers)), ("yanked", Value::Bool(!y.undo))])
+}
+
+// ---- dispatch ----
+
+fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
+    let p = r.path;
+    if p.starts_with("/api/") { return api_route(cfg, r); }
+    let post = r.method == "POST";
+    let get = r.method == "GET" || r.method == "HEAD";
+    if p == "/login" && get { return try login(cfg); }
+    if p == "/auth/github/callback" && get { return try callback(cfg, site, r); }
+    if (p == "/me" && get) || (post && (p == "/logout" || p == "/me/tokens" || (p.starts_with("/me/tokens/") && p.ends_with("/revoke")))) {
+        return try account_route(cfg, site, r);
+    }
+    if !get { return message(site, p, 405, "Method not allowed", "Only GET here."); }
+    if let f: str = http::static_file(site.out, p) {
+        return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: no-cache"], body: "", file: f };
+    }
+    message(site, p, 404, "Not found", "No page here.")
+}
+
+fn handle(s: TcpStream, cfg: Cfg, site: Site) {
+    let t0 = Instant::now();
+    let r = try http::read_request(s, http::MAX_BODY, Duration::sec(30)) catch e {
+        try http::send(s, e.status, ["Content-Type: text/plain; charset=utf-8"], e.msg + "\n", false) catch _ {};
+        s.close();
+        return;
+    };
+    let resp = try route(cfg, site, r) catch e {
+        eprintln(f"{r.method} {r.path}: {e}");
+        message(site, r.path, 500, "Server error", "Something went wrong.")
+    };
+    let head = r.method == "HEAD";
+    if !resp.file.is_empty() {
+        let data = try fs::read(resp.file) catch _ { List::new() };
+        try http::send(s, 200, resp.headers, data, head) catch _ {};
+    } else {
+        try http::send(s, resp.status, resp.headers, resp.body, head) catch _ {};
+    }
+    s.close();
+    // The path only: queries carry OAuth codes.
+    eprintln(f"{r.method} {r.path} {resp.status} {t0.elapsed().as_ms()}ms");
+}
+
+/// Rebuild the site whenever `STALE` is set, one build at a time.
+fn rebuild_loop(index_dir: str) {
+    let exe = try env::current_exe() catch e {
+        eprintln(f"cannot find this program to rebuild the site: {e}");
+        return;
+    };
+    loop {
+        if STALE.swap(0) == 1 {
+            let st = try Command::new(exe.as_str()).args(["--index", index_dir]).status() catch e {
+                eprintln(f"site rebuild: {e}");
+                continue;
+            };
+            if !st.success() { eprintln(f"site rebuild: {st}"); }
+        }
+        thread::sleep(Duration::sec(1));
+    }
+}
+
+pub fn serve(site: Site) throws {
+    let cfg = try load_cfg(".env");
+    if !fs::exists(cfg.index + "/.git") { throw ApiError { status: 0, msg: f"ROKSTONES_INDEX={cfg.index} is not a git checkout" }; }
+    try fs::create_dir_all(cfg.data);
+    // Fail now on a bad data file, not on the first request.
+    try load_db(cfg);
+    let l = try net::tcp_listen(cfg.addr);
+    eprintln(f"serving {site.out}/ and the API on http://{cfg.addr} for {cfg.url}");
+    STALE.store(1);
+    let ix = cfg.index;
+    let bg = thread::spawn(|| {
+        rebuild_loop(ix);
+        0
+    });
+    bg.detach();
+    for c in l.incoming() {
+        let s = try c.get() catch e {
+            eprintln(f"accept: {e}");
+            continue;
+        };
+        if ACTIVE.fetch_add(1) >= MAX_CONNS {
+            ACTIVE.fetch_sub(1);
+            try http::send(s, 503, ["Content-Type: text/plain; charset=utf-8"], "busy\n", false) catch _ {};
+            s.close();
+            continue;
+        }
+        let t = thread::spawn(|| {
+            handle(s, cfg, site);
+            ACTIVE.fetch_sub(1);
+            0
+        });
+        t.detach();
+    }
+}
+
+#[cfg(test)]
+fn expect(ok: bool, what: str) {
+    if !ok { panic(what); }
+}
+
+#[test]
+fn env_files() {
+    let f = parse_env("# c\n\nA=1\nexport B = \"two words\"\nC='x=y'\n=bad\nD=\n");
+    expect(f["A"] == "1" && f["B"] == "two words" && f["C"] == "x=y" && f["D"] == "" && f.len() == 4, "parse");
+    let cfg = Cfg { url: "", addr: "", client_id: "", client_secret: "", admins: ",alice,bob-2,", data: "", index: "", oauth: "", api: "" };
+    expect(is_admin(cfg, "Alice") && is_admin(cfg, "bob-2") && !is_admin(cfg, "bob") && !is_admin(cfg, ""), "admins");
+}
+
+#[test]
+fn ownership_and_tokens() {
+    expect(may_publish(none, false, 5i64, false), "first publisher");
+    expect(!may_publish(none, true, 5i64, false), "unowned names in the index are the admins'");
+    expect(may_publish([5i64], true, 5i64, false) && !may_publish([6i64], true, 5i64, false), "owners");
+    expect(may_publish([6i64], true, 5i64, true), "admins publish any");
+    let t = "rks_" + "ab".repeat(32);
+    let db = Db { accounts: List::new(), sessions: List::new(), tokens: [Token { id: "1", name: "n", account: 1i64, hash: secret::sha256_hex(t), created: 0i64, last_used: 0i64 }], owners: List::new() };
+    expect(token_of(db, t) is Token && token_of(db, t.replace("rks_a", "rks_b")) is none && token_of(db, "ab".repeat(34)) is none, "lookup");
+    let back: Db = try rokon::from_str(rokon::to_string(db)) catch e { panic(f"{e}"); };
+    expect(back.tokens.len() == 1 && back.tokens[0].hash == db.tokens[0].hash, "data file round trip");
+    expect(date(0i64) == "never" && date(1700000000i64) == "2023-11-14" && date(951782400i64) == "2000-02-29", "dates");
+}
+
+#[test]
+fn github_json() {
+    let f = json_fields("{\"login\": \"octo-cat\", \"id\": 583231, \"plan\": {\"name\": \"x\", \"a\": [1, \"]\"]}, \"bio\": \"a \\\"q\\\" \\u00e9\", \"site_admin\": false}");
+    expect(f["login"] == "octo-cat" && f["id"] == "583231" && f["site_admin"] == "false" && f["bio"] == "a \"q\" é" && !f.contains_key("plan"), "fields");
+    expect(json_fields("{\"error\":\"bad_verification_code\"}")["error"] == "bad_verification_code", "compact");
+    expect(json_fields("[1]").len() == 0, "not an object");
+    expect(cq("a\"b\\c") == "\"a\\\"b\\\\c\"", "curl quoting");
+}

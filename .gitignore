@@ -1,4 +1,7 @@
 public/
+public.new/
+public.old/
 target/
 .cache/
 .DS_Store
+.env

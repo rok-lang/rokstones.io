@@ -12,8 +12,8 @@ The rok package registry site. rok packages are called **stones**. The site gene
 You need the rok toolchain (`rok`, `rokc`), `git`, and an index checkout. The default configuration assumes the repositories sit side by side.
 
 ```
-Works/
-├── rok-lang/              # impl/ (toolchain)
+./
+├── rok/                   # toolchain (github.com/rok-lang/rok)
 ├── rokstones.io-index/    # registry index
 ├── stones/rok-markdown/   # markdown renderer stone (path dependency)
 ├── stones/rok-syntax/     # rok / ROKON highlighter stone (path dependency)
@@ -23,7 +23,7 @@ Works/
 If you have no toolchain, build it first.
 
 ```bash
-cd ../rok-lang/impl
+cd ../rok
 cargo build --release
 export PATH="$PWD/target/release:$PATH"
 ```

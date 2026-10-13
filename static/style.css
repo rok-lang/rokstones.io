@@ -261,3 +261,11 @@ footer p { margin: 4px 0; }
   .anchor { display: none; }
   .hero h1 { font-size: 2rem; }
 }
+
+/* Account page (served by `serve`) */
+.account form { display: inline-flex; gap: 8px; align-items: center; margin: 0 0 1em; }
+.account td form { margin: 0; }
+.account input:not([type=hidden]) { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.account button { font: inherit; padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); cursor: pointer; }
+.account button:hover { border-color: var(--accent); }
+.account pre { user-select: all; }

@@ -12,7 +12,7 @@ use pkg::layout;
 pub struct Req {
     pub name: str;
     pub req: str;
-    /// `"normal"` or `"dev"`.
+    /// `"normal"`, `"dev"` or `"native"`.
     pub kind: str;
     /// Another index's url; `""` for this one.
     pub registry: str;
@@ -69,12 +69,13 @@ pub struct Readmes {
 
 // ---- names and paths ----
 
+/// A package name (spec 9.10.3): lowercase ASCII `[a-z0-9_-]+`, starting with a letter.
 pub fn is_name(s: str) -> bool {
     if s.is_empty() { return false; }
     let first = true;
     for c in s.chars() {
-        let ok = c.is_ascii_alphanumeric() || c == '_';
-        if !ok || (first && c.is_ascii_digit()) { return false; }
+        let ok = c.is_ascii_lowercase() || (!first && (c.is_ascii_digit() || c == '_' || c == '-'));
+        if !ok { return false; }
         first = false;
     }
     true
@@ -228,7 +229,7 @@ fn parse_req(v: Value) throws (LineError) -> Req {
     let name = get_str(f, "name") ?? "";
     if !is_name(name) { throw bad(f"bad dependency name `{name}`"); }
     let kind = get_str(f, "kind") ?? "normal";
-    if kind != "normal" && kind != "dev" { throw bad(f"bad dependency kind `{kind}`"); }
+    if kind != "normal" && kind != "dev" && kind != "native" { throw bad(f"bad dependency kind `{kind}`"); }
     Req { name: name, req: get_str(f, "req") ?? "*", kind: kind, registry: get_str(f, "registry") ?? "" }
 }
 
@@ -398,8 +399,9 @@ pub fn load(dir: str, r: Readmes) -> Index {
         };
         if !e.is_file() { continue; }
         let rel = e.path().as_str()[dir.len() + 1:];
-        // Top-level files (config.rokon, README.md) and git internals.
-        if !rel.contains("/") || rel.starts_with(".") { continue; }
+        // Top-level files (config.rokon, README.md), git internals and
+        // native packages.
+        if !rel.contains("/") || rel.starts_with(".") || rel.starts_with("native/") { continue; }
         let text = try fs::read_to_str(e.path()) catch err {
             errors.push(f"{rel}: {err}");
             continue;
@@ -486,7 +488,7 @@ fn semver_order() {
 fn shards() {
     expect(shard("a") == "1/a" && shard("Ab") == "2/ab" && shard("num") == "3/n/num", "short");
     expect(shard("Geom") == "ge/om/geom", "long");
-    expect(is_name("geom_2") && !is_name("2d") && !is_name("a-b") && !is_name(""), "names");
+    expect(is_name("geom_2") && is_name("rok-syntax") && !is_name("2d") && !is_name("-a") && !is_name("Geom") && !is_name(""), "names");
 }
 
 #[test]
