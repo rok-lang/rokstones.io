@@ -29,18 +29,18 @@ Version requirements: `^1.2` (the default; a bare version means the same), `~1.2
 
 ## Publishing
 
-There is no server and no account. Publishing is a commit that adds one line to the index repository.
+Publishing adds one line to the index repository. Sources are not uploaded: the line names a commit of the stone's own repository.
 
-1. The stone repository must have `lib.rok` and `rok.rokon` (`name`, `version`) at its root, a clean work tree, and its commit pushed to `origin`. Dependencies must be stones only (no `Dep::path` / `Dep::git`).
-2. Preview the index line with `rok publish` (dry run).
-3. Fork the index, check it out, then add the line and commit.
+The stone repository must have `lib.rok` and `rok.rokon` (`name`, `version`) at its root, a clean work tree, and its commit pushed to `origin`. Dependencies must be stones only (no `Dep::path` / `Dep::git`). Preview the index line with `rok publish` (dry run).
 
-   ```sh
-   git clone https://github.com/<you>/rokstones.io-index
-   rok publish --index rokstones.io-index --commit
-   ```
+Publishing through rokstones.io needs a publish token from your [account page](https://rokstones.io/me) (log in with GitHub). Publishing is not open to everyone yet; until it is, fork the index, add the line, and send it as a pull request to the [index repository](https://github.com/rok-lang/rokstones.io-index):
 
-4. Send the commit as a pull request to the [index repository](https://github.com/rok-lang/rokstones.io-index). Once merged, the stone appears on this site.
+```sh
+git clone https://github.com/<you>/rokstones.io-index
+rok publish --index rokstones.io-index --commit
+```
+
+Once merged, the stone appears on this site.
 
 A version published by mistake is not deleted but yanked: `rok yank --vers 0.3.1 --index <checkout>` (undo with `--undo`). Projects that already pinned it in `rok.lock` keep working.
 

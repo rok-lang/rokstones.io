@@ -1,8 +1,5 @@
 // rokstones.io-index: the registry index of rok stones (see README.md).
-Registry {
-    name: "rokstones.io",
-    // Sources are not uploaded: each version's `source` is a git commit,
-    // fetched from its own repository and checked against `cksum`.
-    dl: "git",
+// `api`: where `rok login` / `rok publish` / `rok yank` talk to.
+Config {
     api: "https://rokstones.io",
 }

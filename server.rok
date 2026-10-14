@@ -17,7 +17,7 @@ use rok::std::process::{Command, Stdio, ChildStdin, ChildStdout};
 use rok::std::thread;
 use rok::std::time::{Duration, SystemTime};
 use rok::core::task::time::Instant;
-use rok_markdown::esc;
+use markdown::esc;
 use pkg::Site;
 use pkg::layout;
 use pkg::http;

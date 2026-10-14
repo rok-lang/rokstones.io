@@ -2,7 +2,7 @@
 // stone list, one page per stone.
 
 use pkg::Site;
-use rok_markdown::{Options, esc};
+use markdown::{Options, esc};
 use pkg::stones;
 use pkg::stones::{Stone, Version};
 

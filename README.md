@@ -1,6 +1,6 @@
 # rokstones.io
 
-The rok package registry site. rok packages are called **stones**. The site generator itself is written in rok. It reads a checkout of the registry index ([rokstones.io-index](https://github.com/rok-lang/rokstones.io-index)) and writes a static site to `public/`.
+The rok package registry site and server. rok packages are called **stones**. Both are one program written in rok. It reads a checkout of the registry index ([rokstones.io-index](https://github.com/rok-lang/rokstones.io-index)) and writes a static site to `public/`; `serve` serves that site plus GitHub login, publish tokens and the publish / yank API.
 
 - Home page: what a stone is, search, recently published / most depended-on stones, usage, how to publish
 - `stones/index.html`: all stones
@@ -15,7 +15,7 @@ You need the rok toolchain (`rok`, `rokc`), `git`, and an index checkout. The de
 ./
 ├── rok/                   # toolchain (github.com/rok-lang/rok)
 ├── rokstones.io-index/    # registry index
-├── stones/rok-markdown/   # markdown renderer stone (path dependency)
+├── stones/markdown/   # markdown renderer stone (path dependency)
 ├── stones/rok-syntax/     # rok / ROKON highlighter stone (path dependency)
 └── rokstones.io/          # this repository
 ```
@@ -37,7 +37,9 @@ rok run -- --demo              # generate from the sample index in fixtures/
 rok run -- check --demo        # generate from the samples + check
 rok run -- --offline           # don't fetch READMEs with git (cache only)
 rok run -- --index <dir>       # use another index checkout
-rok test                       # semver and index line tests
+rok run -- serve               # serve public/ and the API (see Server)
+rok test                       # unit tests (index lines, HTTP, tokens, validation, .env)
+tests/e2e.sh                   # end-to-end test of serve (see Tests)
 ```
 
 When the build finishes it prints the number of stones, the number of stones with a README, the index error count, the broken link count, and the elapsed time. The link check verifies that the target file and `#anchor` of every `href` / `src` in the generated HTML exist.
@@ -68,6 +70,65 @@ python3 -m http.server -d public 8000
 # http://localhost:8000
 ```
 
+## Server
+
+`rok run -- serve` (or `target/debug/rokstones_io serve`) serves `public/` and the routes below over plain HTTP on `ROKSTONES_ADDR`. TLS ends at a reverse proxy. Run it from this directory (it reads `site.rokon` and `.env`). At start, and after every index commit it makes, it rebuilds the site in the background by running itself with `--index $ROKSTONES_INDEX`; the new site is built in `public.new/` and swapped in.
+
+### Settings (`.env`)
+
+Copy `.env.example` to `.env` (git-ignored). Variables already set in the process environment win over the file.
+
+| Variable | Meaning |
+|----------|---------|
+| `ROKSTONES_URL` | Public base URL (`https://rokstones.io`). The OAuth callback is `{ROKSTONES_URL}/auth/github/callback` |
+| `ROKSTONES_ADDR` | Listen address (default `127.0.0.1:8080`) |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app |
+| `ROKSTONES_ADMINS` | Comma-separated GitHub logins that may create publish tokens. Checked on every API call: removing a login takes its power away at once |
+| `ROKSTONES_DATA` | Directory of `db.rokon` (accounts, sessions, tokens, owners), written atomically (temp file + rename) |
+| `ROKSTONES_INDEX` | Index checkout the server commits to and `git push`es from. It must track an upstream branch; push credentials are the server's own git configuration or SSH key |
+| `GITHUB_OAUTH_URL`, `GITHUB_API_URL` | Default `https://github.com` / `https://api.github.com`; tests point them at a fake |
+
+The GitHub OAuth app's callback URL is `{ROKSTONES_URL}/auth/github/callback`. Logging in asks only for `read:user`.
+
+### Accounts and tokens
+
+Logging in is only through GitHub OAuth (`/login`). An account is keyed by its numeric GitHub id. Sessions are a random 32-byte cookie (`HttpOnly; Secure; SameSite=Lax`, 30 days), stored as SHA-256.
+
+`/me` shows the account. For logins in `ROKSTONES_ADMINS` it lists publish tokens (name, created, last used), creates one (shown once) and revokes them; for everyone else it says publishing is not open yet. A token is `rks_` and 64 hex digits (32 random bytes from the OS), stored only as its SHA-256 and compared in constant time. Forms carry a per-session CSRF token.
+
+### API
+
+Request and response bodies are ROKON. Requests carry `Authorization: Bearer rks_..`. Errors are `Error { message: ".." }` with a 4xx / 5xx status.
+
+| Route | Body | Answer |
+|-------|------|--------|
+| `GET /api/v1/me` | | `Me { login: "..", publish: true }`; 401 for a bad token |
+| `POST /api/v1/publish` | the index entry `rok publish` prints: a `Stone { .. }` line or a `Native { .. }` value | `Published { name: "..", vers: "..", file: ".." }` |
+| `POST /api/v1/yank` | `Yank { name: "..", vers: "..", undo: false, native: false }` (`undo`, `native` optional) | `Yanked { name: "..", vers: "..", yanked: true }` |
+
+Publishing and yanking need an admin token (403 "Publishing is not open yet" otherwise). An entry is checked as `rok publish` checks it: the name rule of spec 9.10.3 (`[a-z][a-z0-9_-]*`), no other spelling of the name in the index (`-` / `_` and case are one), a new version, dependencies on index packages only, `https://` source and artifact URLs, `yanked: false`, no unknown fields. Native archives are not downloaded: their hashes, license files and target names are the client's checks. The first publisher of a name owns it (owners are kept in `db.rokon`); admins may publish any name.
+
+Each write runs under one lock: the checkout is reset to its upstream, the line appended (or its `yanked` flipped), committed as `Publish <name> <vers>` / `Yank ..` / `Unyank ..` (author: the GitHub account) and pushed. When the push fails the checkout goes back to the upstream state and the answer is 503.
+
+The index's root `config.rokon` (`Config { api: "https://rokstones.io" }`) tells the `rok` client where this API is.
+
+### Deployment
+
+Run the server as its own user, with a git identity that can push to the index, behind a TLS proxy. Caddy:
+
+```caddy
+rokstones.io {
+    encode gzip
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Logs go to stderr, one line per request (method, path without query, status, time). They never contain tokens, cookies or OAuth codes.
+
+## Tests
+
+`rok test` runs the unit tests. `tests/e2e.sh` builds the program and `tests/fake-github` (a stand-in for GitHub's OAuth endpoints and `/user`), creates a temp index (a bare remote and a checkout), starts `serve` against both, then: logs in as an admin and as a non-admin through the callback, checks the state cookie and CSRF checks, creates a token, gets "not open yet" / 403 for the non-admin, calls `/api/v1/me`, publishes stones and a native package, yanks and unyanks, checks the commits pushed to the remote, a refused push (503, checkout reset), the rebuilt site, a login removed from the admins, revoking and logging out. It needs `rok`, `rokc`, `git` and `curl` on `PATH` and removes its temp directory at the end.
+
 ## Configuration
 
 Edit `site.rokon` (ROKON).
@@ -87,12 +148,17 @@ Edit `site.rokon` (ROKON).
 
 | File | Contents |
 |------|----------|
-| `main.rok`      | Reads configuration and arguments, generates pages, builds the search index, copies static files, checks links |
+| `main.rok`      | Reads configuration and arguments, generates pages, builds the search index, copies static files, checks links; `serve` |
+| `server.rok`    | `serve`: settings, `db.rokon`, GitHub login, account page, API, site rebuilds |
+| `http.rok`      | HTTP/1.1 requests and responses, forms, cookies, static files |
+| `index.rok`     | API entry checks, index commits and pushes |
+| `secret.rok`    | SHA-256, random bytes, constant-time compare |
+| `tests/`        | `e2e.sh` and the fake GitHub it runs |
 | `stones.rok`    | Reads the index (`Stone { .. }` lines), semver ordering, latest version, dependents, README fetching |
 | `layout.rok`    | Page frame (header, search, footer), home page, stone list, stone page, markdown options |
 | `pages/index.md`| Home page text (what a stone is, using stones, publishing) |
 | `static/`       | `style.css` (light / dark), `search.js`, logo |
 
-Markdown rendering (`render_untrusted` for READMEs) and code highlighting are handled by the stones [`rok-markdown`](https://github.com/rok-lang/rok-markdown) and [`rok-syntax`](https://github.com/rok-lang/rok-syntax) (path dependencies in `rok.rokon`). They become version dependencies once published to rokstones.io.
+Markdown rendering (`render_untrusted` for READMEs) and code highlighting are handled by the stones [`markdown`](https://github.com/rok-lang/markdown) and [`rok-syntax`](https://github.com/rok-lang/rok-syntax) (path dependencies in `rok.rokon`). They become version dependencies once published to rokstones.io.
 
 Recent publish order and dates are read from the index's git history (the last commit that changed each stone file). If the index is not a git repository, stones are ordered by name.

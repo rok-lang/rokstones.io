@@ -1,0 +1,62 @@
+// A stand-in for GitHub's OAuth endpoints and `/user`, for tests/e2e.sh.
+//
+//   fake_github <addr> <client secret>
+//
+// Code `admin` logs in as `alice` (id 1001), `user` as `Bob` (id 1002).
+
+use rok::std::env;
+use rok::std::net;
+use rok::std::net::TcpStream;
+use rok::std::io::byte_buf;
+
+fn answer(s: TcpStream, secret: str) throws {
+    let data: List<u8> = List::new();
+    let buf = byte_buf(4096);
+    let text = "";
+    loop {
+        let k = try s.read(buf);
+        if k == 0 { break; }
+        for i in 0..k { data.push(buf[i]); }
+        text = try str::from_utf8(data[0:data.len()]);
+        if let p: (str, str) = text.split_once("\r\n\r\n") {
+            let want = 0usize;
+            for l in p.0.split("\r\n") {
+                if let v: str = l.to_lowercase().strip_prefix("content-length:") { want = try v.trim().parse::<usize>(); }
+            }
+            if p.1.len() >= want { break; }
+        }
+    }
+    let line = text.split_once("\r\n") ?? ("", "");
+    let body = (text.split_once("\r\n\r\n") ?? ("", "")).1;
+    let out = "{\"message\":\"Not Found\"}";
+    let status = "404 Not Found";
+    if line.0.starts_with("POST /login/oauth/access_token ") && text.contains("\r\nAccept: application/json\r\n") {
+        status = "200 OK";
+        out = "{\"error\":\"bad_verification_code\"}";
+        if body.contains(f"client_secret={secret}") && body.contains("redirect_uri=") {
+            if body.contains("code=admin&") { out = "{\"access_token\":\"gho_alice\",\"token_type\":\"bearer\",\"scope\":\"read:user\"}"; }
+            if body.contains("code=user&") { out = "{\"access_token\":\"gho_bob\",\"token_type\":\"bearer\",\"scope\":\"read:user\"}"; }
+        }
+    } else if line.0.starts_with("GET /user ") {
+        status = "401 Unauthorized";
+        if text.contains("\r\nAuthorization: Bearer gho_alice\r\n") {
+            status = "200 OK";
+            out = "{\"login\":\"alice\",\"id\":1001,\"plan\":{\"name\":\"free\"}}";
+        }
+        if text.contains("\r\nAuthorization: Bearer gho_bob\r\n") {
+            status = "200 OK";
+            out = "{\"login\":\"Bob\",\"id\":1002}";
+        }
+    }
+    try s.write_str(f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {out.len()}\r\nConnection: close\r\n\r\n{out}");
+}
+
+fn main() throws {
+    let args = env::args();
+    let l = try net::tcp_listen(args[1]);
+    for c in l.incoming() {
+        let s = try c.get();
+        try answer(s, args[2]) catch e { eprintln(f"fake github: {e}"); };
+        s.close();
+    }
+}

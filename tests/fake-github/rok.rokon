@@ -1,0 +1,4 @@
+Package {
+    name: "fake_github",
+    version: "0.1.0",
+}

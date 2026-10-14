@@ -208,7 +208,7 @@ fn main() throws {
     for s in all { have.insert(s.name); }
 
     let files: Dict<str, str> = Dict::new();
-    let guide = rok_markdown::render(try fs::read_to_str("pages/index.md"), layout::md(|h| h));
+    let guide = markdown::render(try fs::read_to_str("pages/index.md"), layout::md(|h| h));
     files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all, guide.html)));
     files.insert("stones/index.html", layout::page(site, "stones/index.html", "All stones", layout::all_stones(all)));
     for s in all {
