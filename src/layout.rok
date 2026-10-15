@@ -81,7 +81,8 @@ fn stone_item(out: str, s: Stone, note: str) -> str {
     let href = esc(root_of(out) + stone_out(s.name));
     let desc = if s.desc.is_empty() { "" } else { f"<span class=\"desc\">{esc(s.desc)}</span>" };
     let side = if note.is_empty() { "" } else { f"<span class=\"note\">{esc(note)}</span>" };
-    f"<li><a href=\"{href}\"><span class=\"name\">{esc(s.name)}</span> <span class=\"ver\">{esc(s.latest.vers)}</span>{side}{desc}</a></li>"
+    let lic = if s.latest.license.is_empty() { "" } else { f" <span class=\"license\">{esc(s.latest.license)}</span>" };
+    f"<li><a href=\"{href}\"><span class=\"name\">{esc(s.name)}</span> <span class=\"ver\">{esc(s.latest.vers)}</span>{lic}{side}{desc}</a></li>"
 }
 
 fn stone_list(out: str, xs: List<Stone>, notes: List<str>, empty: str) -> str {
@@ -209,6 +210,13 @@ pub fn stone_page(site: Site, s: Stone, have: Set<str>) -> str {
     for r in s.rdeps {
         rd.push_str(f"<li><a href=\"{esc(root_of(out) + stone_out(r.name))}\">{esc(r.name)}</a> <code>{esc(r.req)}</code></li>");
     }
+    let fs = StrBuf::new();
+    for (name, on) in l.features {
+        let what = StrBuf::new();
+        for e in on { what.push_str(f" <code>{esc(e)}</code>"); }
+        fs.push_str(f"<li><code>{esc(name)}</code>{what.to_str()}</li>");
+    }
+    let features = if fs.is_empty() { "" } else { f"<section><h2>Features</h2><ul class=\"deps\">{fs.to_str()}</ul></section>" };
     let rdeps = if rd.is_empty() { "<p class=\"empty\">None</p>" } else { f"<ul class=\"deps\">{rd.to_str()}</ul>" };
 
     let vs = StrBuf::new();
@@ -222,16 +230,18 @@ pub fn stone_page(site: Site, s: Stone, have: Set<str>) -> str {
     let repo_html = if repo.is_empty() { f"<code>{esc(l.url)}</code>" } else { f"<a href=\"{esc(repo)}\">{esc(l.url)}</a>" };
     let commit = if tree.is_empty() { f"<code>{short(l.rev)}</code>" } else { f"<a href=\"{esc(tree)}\"><code>{short(l.rev)}</code></a>" };
     let date = if s.date.is_empty() { "" } else { f"<dt>Last published</dt><dd>{esc(s.date)}</dd>" };
+    let lic = if l.license.is_empty() { "" } else { f"<dt>License</dt><dd>{esc(l.license)}</dd>" };
+    let about = if s.desc.is_empty() { "" } else { f"<p class=\"about\">{esc(s.desc)}</p>\n" };
 
     f"<div class=\"stone-head\">
 <h1>{esc(s.name)} <span class=\"ver\">{esc(l.vers)}</span></h1>
-{notice}</div>
+{about}{notice}</div>
 <div class=\"stone\">
 <aside class=\"meta\">
 <section><h2>Install</h2>{code("sh", add)}<p>Or in <code>rok.rokon</code>:</p>{code("rokon", manifest)}</section>
-<section><h2>Source</h2><dl><dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd>{commit}</dd><dt>tree hash</dt><dd><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{date}<dt>Index file</dt><dd><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\"><code>{esc(s.file)}</code></a></dd></dl></section>
+<section><h2>Source</h2><dl><dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd>{commit}</dd><dt>tree hash</dt><dd><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{lic}{date}<dt>Index file</dt><dd><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\"><code>{esc(s.file)}</code></a></dd></dl></section>
 <section><h2>Dependencies ({l.vers})</h2>{if deps.is_empty() { "<p class=\"empty\">None</p>" } else { deps }}{if dev.is_empty() { "" } else { f"<h3>Dev dependencies</h3>{dev}" }}</section>
-<section><h2>Dependents</h2>{rdeps}</section>
+{features}<section><h2>Dependents</h2>{rdeps}</section>
 <section><h2>Versions ({s.versions.len()})</h2><ul class=\"versions\">{vs.to_str()}</ul></section>
 </aside>
 <article class=\"readme\">

@@ -184,6 +184,93 @@ fn https(url: str) -> bool {
     url.starts_with("https://") && url.len() > 8 && !url.contains(" ") && !url.contains("\"")
 }
 
+fn opt_bool(f: OrderedDict<str, Value>, k: str) throws (ApiError) -> bool {
+    match f.get(k) {
+        v: Value => {
+            let Value::Bool(b) = v else { throw bad(f"`{k}` is true or false"); };
+            b
+        },
+        none => false,
+    }
+}
+
+/// A feature name: `[a-z0-9][a-z0-9_-]*`.
+fn is_feature(s: str) -> bool {
+    if s.is_empty() { return false; }
+    let first = true;
+    for c in s.chars() {
+        let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || (!first && (c == '_' || c == '-'));
+        if !ok { return false; }
+        first = false;
+    }
+    true
+}
+
+/// A list of feature names.
+fn str_list(v: Value, what: str) throws (ApiError) -> List<str> {
+    let Value::List(xs) = v else { throw bad(f"{what} is a list of names"); };
+    let out: List<str> = List::new();
+    for x in xs {
+        let Value::Str(n) = x else { throw bad(f"{what} is a list of names"); };
+        if !is_feature(n) { throw bad(f"`{n}` is not a feature name"); }
+        out.push(n);
+    }
+    out
+}
+
+/// A stone's `features` table against its normal dependencies (`normal`:
+/// name → optional), as the client's manifest check does.
+fn check_features(v: Value, normal: Dict<str, bool>) throws (ApiError) {
+    let Value::Dict(d) = v else { throw bad("`features` is a dict of name → list"); };
+    let table: OrderedDict<str, List<str>> = OrderedDict::new();
+    for k in d.keys() {
+        let Value::Str(name) = k else { throw bad("a feature name is a string"); };
+        if !is_feature(name) { throw bad(f"`{name}` is not a feature name"); }
+        let entries: List<str> = List::new();
+        let Value::List(xs) = d[k] else { throw bad(f"feature `{name}` is a list"); };
+        for x in xs {
+            let Value::Str(e) = x else { throw bad(f"feature `{name}` lists strings"); };
+            entries.push(e);
+        }
+        table.insert(name, entries);
+    }
+    let enabled: Set<str> = Set::new();
+    for (name, entries) in table {
+        for e in entries {
+            if let dn: str = e.strip_prefix("dep:") {
+                if !(normal.get(dn) ?? false) { throw bad(f"feature `{name}`: `{e}` needs `{dn}` to be an optional normal dependency"); }
+                enabled.insert(dn);
+            } else if let (dp, fname): (str, str) = e.split_once("/") {
+                let weak = dp.ends_with("?");
+                let dn = if weak { dp[0:dp.len() - 1] } else { dp };
+                let o = normal.get(dn) ?? { throw bad(f"feature `{name}`: `{dn}` is not a normal dependency"); };
+                if !is_feature(fname) { throw bad(f"`{fname}` is not a feature name"); }
+                if weak && !o { throw bad(f"feature `{name}`: `{e}` needs `{dn}` to be optional"); }
+                if !weak { enabled.insert(dn); }
+            } else if !table.contains_key(e) {
+                throw bad(f"feature `{name}`: `{e}` is not a feature");
+            }
+        }
+    }
+    // Feature → feature entries form no cycle: 1 visiting, 2 done.
+    let state: Dict<str, i32> = Dict::new();
+    for start in table.keys() { try no_cycle(table, start, state); }
+    for (dn, opt) in normal {
+        if opt && !enabled.contains(dn) { throw bad(f"optional dependency `{dn}` is not enabled by any feature (`dep:{dn}`)"); }
+    }
+}
+
+fn no_cycle(table: OrderedDict<str, List<str>>, name: str, state: Dict<str, i32>) throws (ApiError) {
+    let s = state.get(name) ?? 0;
+    if s == 2 { return; }
+    if s == 1 { throw bad(f"features form a cycle through `{name}`"); }
+    state.insert(name, 1);
+    for e in table[name] {
+        if table.contains_key(e) { try no_cycle(table, e, state); }
+    }
+    state.insert(name, 2);
+}
+
 const META: [str; 3] = ["description", "license", "repository"];
 
 fn check_meta(f: OrderedDict<str, Value>, what: str) throws (ApiError) {
@@ -192,7 +279,9 @@ fn check_meta(f: OrderedDict<str, Value>, what: str) throws (ApiError) {
 
 /// A `Stone { .. }` line, checked.
 fn check_stone(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
-    try only(f, ["name", "vers", "deps", "source", "cksum", "yanked", "description", "license", "repository"], "Stone");
+    try only(f, ["name", "vers", "deps", "features", "source", "cksum", "yanked", "description", "license", "repository"], "Stone");
+    // Normal dependencies: whether each is optional.
+    let normal: Dict<str, bool> = Dict::new();
     let name = try str_field(f, "name", "Stone");
     try check_name(name, "stone");
     let vers = try str_field(f, "vers", "Stone");
@@ -202,7 +291,7 @@ fn check_stone(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
         for x in xs {
             let q = record(x, "") ?? (record(x, "Req") ?? OrderedDict::new());
             if q.len() == 0 { throw bad("a dependency is `{ name: .., req: .., kind: .. }`"); }
-            try only(q, ["name", "req", "kind", "registry"], "dependency");
+            try only(q, ["name", "req", "kind", "registry", "optional", "features", "default_features"], "dependency");
             let dn = try str_field(q, "name", "dependency");
             try check_name(dn, "dependency");
             let req = try str_field(q, "req", "dependency");
@@ -210,8 +299,17 @@ fn check_stone(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
             let kind = (try opt_str(q, "kind", "dependency")) ?? "normal";
             if kind != "normal" && kind != "dev" && kind != "native" { throw bad("`kind` is \"normal\", \"dev\" or \"native\""); }
             try opt_str(q, "registry", "dependency");
+            let opt = try opt_bool(q, "optional");
+            if opt && kind != "normal" { throw bad(f"`{dn}`: only a normal dependency is optional"); }
+            if let fv: Value = q.get("features") {
+                if kind == "native" { throw bad(f"`{dn}`: a native package has no features"); }
+                try str_list(fv, f"`{dn}` features");
+            }
+            try opt_bool(q, "default_features");
+            if kind == "normal" { normal.insert(dn, opt); }
         }
     }
+    if let fv: Value = f.get("features") { try check_features(fv, normal); }
     let src = f.get("source") ?? Value::None;
     let ok = false;
     if let Value::Variant { path, args, named } = src {
@@ -361,7 +459,7 @@ fn versions(text: str) -> List<(str, str)> {
     for line in text.split("\n") {
         if line.trim().is_empty() { continue; }
         let v = try rokon::parse(line) catch _ { continue; };
-        if let Value::Struct { name: n, fields } = v {
+        if let Value::Struct { name: _, fields } = v {
             let nm = if let Value::Str(s) = fields.get("name") ?? Value::None { s } else { "" };
             let vs = if let Value::Str(s) = fields.get("vers") ?? Value::None { s } else { "" };
             out.push((nm, vs));
@@ -395,6 +493,17 @@ pub fn exists(dir: str, native: bool, name: str) throws (ApiError) -> bool {
 }
 
 /// Append `e` to the index (checked against it), commit as `who`, push.
+/// A stone's source commit, fetched into `cache`, is a library package
+/// (has `src/lib.rok`) whose tree hash is the line's `cksum`.
+pub fn check_source(cache: str, e: Entry) throws (ApiError) {
+    if e.native { return; }
+    let (_, v) = try stones::parse_line(e.line) catch x { throw bad(x.msg); };
+    let db = stones::fetch_commit(cache, v.url, v.rev) ?? { throw bad(f"cannot fetch {v.url} at {v.rev}"); };
+    if !stones::has_file(db, v.rev, "src/lib.rok") { throw bad("not a library package (no src/lib.rok)"); }
+    let tree = stones::tree_of(db, v.rev) ?? "";
+    if tree != v.cksum { throw bad(f"cksum {v.cksum} is not the tree hash of commit {v.rev} ({tree})"); }
+}
+
 pub fn publish(dir: str, e: Entry, who: str) throws (ApiError) {
     try taken(dir, e.native, e.name);
     let text = try read_rel(dir, e.file);
@@ -495,8 +604,60 @@ fn entries() {
     let nat = f"Native {{ name: \"zlib\", vers: \"1.3.1\", deps: {{ \"yy\": Dep::native(\"^1.0\") }}, targets: {{ \"aarch64-apple-darwin\": Artifact {{ url: \"https://x/z.tar.gz\", sha256: \"{h}\", links: {{ \"z\": \"static\" }}, runtime: [\"bin/z.dll\"] }} }}, yanked: false }}";
     let n = try parse_entry(nat) catch x { panic(x.msg); };
     expect(n.native && n.file == "native/zl/ib/zlib" && n.line == nat, f"native: {n.line}");
+    let ft = f"Stone {{ name: \"geom\", vers: \"0.3.1\", deps: [{{ name: \"num\", req: \"^1.2\", kind: \"normal\", optional: true, features: [\"fast\"], default_features: false }}], features: {{ \"default\": [\"simd\"], \"simd\": [\"dep:num\", \"num?/x\"] }}, source: Dep::git(\"https://github.com/o/geom\", rev: \"{rev}\"), cksum: \"{rev}\", yanked: false }}";
+    let fe = try parse_entry(ft) catch x { panic(x.msg); };
+    expect(fe.line == ft, f"features line: {fe.line}");
+    expect(status_of(ft.replace("dep:num", "dep:nope")) == 400, "unknown dep");
+    expect(status_of(good.replace("kind: \"native\"", "kind: \"native\", optional: true")) == 400, "optional native");
+    expect(status_of(ft.replace("\"dep:num\", ", "")) == 400, "unused optional dep");
+    expect(status_of(ft.replace("\"dep:num\", \"num?/x\"", "\"dep:num\", \"default\"")) == 400, "cycle");
+    expect(status_of(ft.replace("\"simd\": [", "\"Simd\": [").replace("[\"simd\"]", "[\"Simd\"]")) == 400, "feature name");
     expect(status_of(nat.replace("Dep::native(\"^1.0\")", f"Dep::native(url: \"https://x\", sha256: \"{h}\")")) == 400, "direct dep");
     expect(status_of(nat.replace("https://x/z", "file:///z")) == 400, "artifact https");
     expect(status_of(nat.replace("bin/z.dll", "../z.dll")) == 400, "runtime path");
     expect(status_of(nat.replace("\"static\"", "\"shared\"")) == 400, "link kind");
+}
+
+#[cfg(test)]
+fn sh(args: List<str>) -> str {
+    let o = try! Command::new(args[0]).args(args[1:args.len()].to_list()).output();
+    if !o.status.success() { panic(f"{args:?}: {try! str::from_utf8(o.stderr)}"); }
+    (try! str::from_utf8(o.stdout)).trim()
+}
+
+/// A git repository at `dir` with `file` committed; its commit.
+#[cfg(test)]
+fn repo_with(dir: str, file: str) -> str {
+    try! fs::create_dir_all(dir + "/src");
+    try! fs::write(f"{dir}/{file}", "pub fn f() -> i32 { 1 }\n");
+    sh(["git", "-C", dir, "init", "-q"]);
+    sh(["git", "-C", dir, "add", "-A"]);
+    sh(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
+    sh(["git", "-C", dir, "rev-parse", "HEAD"])
+}
+
+#[test]
+fn sources() {
+    let t = rok::std::env::temp_dir().as_str() + f"/rokstones-src-{rok::std::process::id()}";
+    let entry = |dir: str, rev: str, cksum: str| Entry { name: "geom", vers: "0.1.0", native: false, file: "ge/om/geom", line: f"Stone {{ name: \"geom\", vers: \"0.1.0\", source: Dep::git(\"{dir}\", rev: \"{rev}\"), cksum: \"{cksum}\" }}" };
+    let lib = repo_with(t + "/lib", "src/lib.rok");
+    let tree = sh(["git", "-C", t + "/lib", "rev-parse", "HEAD^{tree}"]);
+    try check_source(t + "/cache", entry(t + "/lib", lib, tree)) catch e { panic(e.msg); };
+    let wrong = try {
+        check_source(t + "/cache", entry(t + "/lib", lib, lib));
+        ""
+    } catch e { e.msg };
+    expect(wrong == f"cksum {lib} is not the tree hash of commit {lib} ({tree})", wrong);
+    let app = repo_with(t + "/app", "src/main.rok");
+    let msg = try {
+        check_source(t + "/cache", entry(t + "/app", app, app));
+        ""
+    } catch e { e.msg };
+    expect(msg == "not a library package (no src/lib.rok)", msg);
+    let gone = try {
+        check_source(t + "/cache", entry(t + "/nowhere", "ab".repeat(20), tree));
+        ""
+    } catch e { e.msg };
+    expect(gone.starts_with("cannot fetch"), gone);
+    try! fs::remove_dir_all(t);
 }

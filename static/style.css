@@ -219,6 +219,7 @@ footer p { margin: 4px 0; }
 .stones .name { font-weight: 600; color: var(--accent); }
 .stones .ver { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); }
 .stones .note { float: right; margin-left: 12px; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.stones .license { margin-left: 6px; font-size: 0.8rem; color: var(--muted); }
 .stones .desc { display: block; color: var(--muted); font-size: 0.9rem; }
 
 /* stone page */
@@ -226,6 +227,7 @@ footer p { margin: 4px 0; }
 .stone-head { padding: 8px 0 16px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
 .stone-head h1 { font-size: 2rem; margin: 0.2em 0 0.2em; }
 .stone-head .ver { font-family: var(--mono); font-size: 1.1rem; font-weight: 400; color: var(--muted); }
+.stone-head .about { margin: 0; color: var(--muted); }
 .warn { margin: 12px 0 0; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--caution); }
 .stone { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 40px; }
 .stone .readme { grid-column: 1; grid-row: 1; min-width: 0; }

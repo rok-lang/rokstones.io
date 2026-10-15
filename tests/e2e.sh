@@ -53,6 +53,9 @@ start_server() {
         ROKSTONES_INDEX="$T/index" \
         GITHUB_OAUTH_URL="http://127.0.0.1:$gh_port" \
         GITHUB_API_URL="http://127.0.0.1:$gh_port" \
+        GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0="url.file://$T/src/.insteadOf" \
+        GIT_CONFIG_VALUE_0="https://example.invalid/" \
         "$bin" serve >>"$T/server.log" 2>&1) &
     server=$!
     pids+=($server)
@@ -152,8 +155,20 @@ expect_body 'Error { message:' "error body"
 req POST /api/v1/me "${auth[@]}"
 expect_code 405 "method"
 
-rev=4f0c2a9e1b7d3c58a6e09f21d4b8c7a3e5f60123
-line="Stone { name: \"geom\", vers: \"0.1.0\", deps: [], source: Dep::git(\"https://example.invalid/geom\", rev: \"$rev\"), cksum: \"$rev\", yanked: false }"
+# Stone sources: https://example.invalid/<name> is $T/src/<name> (the
+# server's git config above). `geom` is a library, `app` is not.
+source_repo() {
+    mkdir -p "$T/src/$1/src"
+    echo 'pub fn f() -> i32 { 1 }' > "$T/src/$1/src/$2"
+    git -C "$T/src/$1" init -q
+    git -C "$T/src/$1" add -A
+    git -C "$T/src/$1" -c user.name=t -c user.email=t@t commit -q -m init
+    git -C "$T/src/$1" rev-parse HEAD
+}
+rev=$(source_repo geom lib.rok)
+tree=$(git -C "$T/src/geom" rev-parse "HEAD^{tree}")
+app_rev=$(source_repo app main.rok)
+line="Stone { name: \"geom\", vers: \"0.1.0\", deps: [], source: Dep::git(\"https://example.invalid/geom\", rev: \"$rev\"), cksum: \"$tree\", yanked: false }"
 req POST /api/v1/publish "${auth[@]}" --data-binary "$line"
 expect_code 200 "publish"
 expect_body 'Published { name: "geom", vers: "0.1.0", file: "ge/om/geom" }' "publish body"
@@ -174,6 +189,15 @@ req POST /api/v1/publish "${auth[@]}" --data-binary "${line//yanked: false/yanke
 expect_code 400 "unknown field"
 req POST /api/v1/publish --data-binary "$line"
 expect_code 401 "no token"
+app_line=${line//example.invalid\/geom/example.invalid\/app}
+req POST /api/v1/publish "${auth[@]}" --data-binary "${app_line//$rev/$app_rev}"
+expect_code 400 "not a library"
+expect_body 'not a library package (no src/lib.rok)' "not a library body"
+req POST /api/v1/publish "${auth[@]}" --data-binary "${line//$rev/$(printf 'cd%.0s' $(seq 20))}"
+expect_code 400 "unfetchable source"
+req POST /api/v1/publish "${auth[@]}" --data-binary "${line//cksum: \"$tree\"/cksum: \"$rev\"}"
+expect_code 400 "cksum mismatch"
+expect_body "cksum $rev is not the tree hash of commit $rev ($tree)" "cksum mismatch body"
 h=$(printf 'ab%.0s' $(seq 32))
 native="Native { name: \"zlib\", vers: \"1.3.1\", deps: {}, targets: { \"x86_64-unknown-linux-gnu\": Artifact { url: \"https://example.invalid/z.tar.gz\", sha256: \"$h\", links: { \"z\": \"static\" }, runtime: [] } }, yanked: false, license: \"Zlib\" }"
 req POST /api/v1/publish "${auth[@]}" --data-binary "$native"

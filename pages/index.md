@@ -31,7 +31,7 @@ Version requirements: `^1.2` (the default; a bare version means the same), `~1.2
 
 Publishing adds one line to the index repository. Sources are not uploaded: the line names a commit of the stone's own repository.
 
-The stone repository must have `lib.rok` and `rok.rokon` (`name`, `version`) at its root, a clean work tree, and its commit pushed to `origin`. Dependencies must be stones only (no `Dep::path` / `Dep::git`). Preview the index line with `rok publish` (dry run).
+The stone repository must have `rok.rokon` (`name`, `version`) at its root and its sources in `src/` (a library: `src/lib.rok`), a clean work tree, and its commit pushed to `origin`. Dependencies must be stones only (no `Dep::path` / `Dep::git`). Preview the index line with `rok publish` (dry run).
 
 Publishing through rokstones.io needs a publish token from your [account page](https://rokstones.io/me) (log in with GitHub). Publishing is not open to everyone yet; until it is, fork the index, add the line, and send it as a pull request to the [index repository](https://github.com/rok-lang/rokstones.io-index):
 

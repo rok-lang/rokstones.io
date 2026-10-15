@@ -25,6 +25,11 @@ pub struct Version {
     pub rev: str;
     pub cksum: str;
     pub yanked: bool;
+    /// From the manifest; `""` when not given.
+    pub description: str;
+    pub license: str;
+    /// Feature name and what it enables, in manifest order.
+    pub features: List<(str, List<str>)>;
 }
 
 pub struct RDep {
@@ -45,7 +50,8 @@ pub struct Stone {
     pub date: str;
     /// Rendered README of the latest version; `""` when unavailable.
     pub readme: str;
-    /// First paragraph of the README, as text.
+    /// The latest version's description, else the README's first
+    /// paragraph, as text.
     pub desc: str;
     /// Stones whose latest version depends on this one (normal deps).
     pub rdeps: List<RDep>;
@@ -265,7 +271,20 @@ pub fn parse_line(line: str) throws (LineError) -> (str, Version) {
     if let y: Value = f.get("yanked") {
         if let Value::Bool(b) = y { yanked = b; }
     }
-    (name, Version { vers: vers, deps: deps, url: url, rev: rev, cksum: get_str(f, "cksum") ?? "", yanked: yanked })
+    let features: List<(str, List<str>)> = List::new();
+    if let Value::Dict(d) = f.get("features") ?? Value::None {
+        for k in d.keys() {
+            let Value::Str(fname) = k else { continue; };
+            let on: List<str> = List::new();
+            if let Value::List(xs) = d[k] {
+                for x in xs {
+                    if let Value::Str(e) = x { on.push(e); }
+                }
+            }
+            features.push((fname, on));
+        }
+    }
+    (name, Version { vers: vers, deps: deps, url: url, rev: rev, cksum: get_str(f, "cksum") ?? "", yanked: yanked, description: get_str(f, "description") ?? "", license: get_str(f, "license") ?? "", features: features })
 }
 
 // ---- git ----
@@ -298,6 +317,31 @@ fn fetchable(url: str) -> bool {
     url.starts_with("https://") || url.starts_with("http://") || url.starts_with("file://") || url.starts_with("/")
 }
 
+/// A bare repository under `cache` that holds commit `rev` of `url`
+/// (fetched if missing); none when it cannot be fetched.
+pub fn fetch_commit(cache: str, url: str, rev: str) -> str | none {
+    let db = cache + "/git";
+    if !fs::exists(db) {
+        try fs::create_dir_all(cache) catch _ { return none; };
+        if git(["init", "-q", "--bare", db]) is none { return none; }
+    }
+    if git(["-C", db, "cat-file", "-e", rev + "^{commit}"]) is none {
+        if git(["-C", db, "fetch", "-q", "--depth", "1", url, rev]) is none { return none; }
+    }
+    db
+}
+
+/// Whether commit `rev` in repository `db` has the file `path`.
+pub fn has_file(db: str, rev: str, path: str) -> bool { git(["-C", db, "cat-file", "-e", f"{rev}:{path}"]) is str }
+
+/// The tree hash of commit `rev` in repository `db`.
+pub fn tree_of(db: str, rev: str) -> str | none {
+    match git(["-C", db, "rev-parse", rev + "^{tree}"]) {
+        t: str => t.trim(),
+        none => none,
+    }
+}
+
 /// README text of `url` at `rev`, cached by commit. A failed fetch is
 /// not cached, so the next online build tries again.
 fn readme_text(r: Readmes, name: str, url: str, rev: str) -> str {
@@ -308,17 +352,10 @@ fn readme_text(r: Readmes, name: str, url: str, rev: str) -> str {
     let cached = f"{r.cache}/readme/{name}/{rev}.md";
     if fs::exists(cached) { return try fs::read_to_str(cached) catch _ { "" }; }
     if r.offline || !fetchable(url) { return ""; }
-    let db = r.cache + "/git";
-    if !fs::exists(db) {
-        try fs::create_dir_all(r.cache) catch _ { return ""; };
-        if git(["init", "-q", "--bare", db]) is none { return ""; }
-    }
-    if git(["-C", db, "cat-file", "-e", rev + "^{commit}"]) is none {
-        if git(["-C", db, "fetch", "-q", "--depth", "1", url, rev]) is none {
-            eprintln(f"warning: {name}: cannot fetch {url} {rev[:12]}");
-            return "";
-        }
-    }
+    let db = fetch_commit(r.cache, url, rev) ?? {
+        eprintln(f"warning: {name}: cannot fetch {url} {rev[:12]}");
+        return "";
+    };
     let text = "";
     for f in ["README.md", "readme.md", "Readme.md", "README"] {
         if let t: str = git(["-C", db, "show", f"{rev}:{f}"]) {
@@ -462,7 +499,7 @@ pub fn load(dir: str, r: Readmes) -> Index {
             time: t,
             date: d,
             readme: html,
-            desc: first_para(html, 140),
+            desc: if l.description.is_empty() { first_para(html, 140) } else { l.description },
             rdeps: rdeps.get(k) ?? List::new(),
         });
     }
@@ -493,8 +530,9 @@ fn shards() {
 
 #[test]
 fn lines() {
-    let (name, v) = try parse_line("Stone { name: \"geom\", vers: \"0.3.1\", deps: [{ name: \"num\", req: \"^1.2\", kind: \"normal\" }], source: Dep::git(\"https://github.com/o/geom\", rev: \"4f0c2a9e1b7d3c58a6e09f21d4b8c7a3e5f60123\"), cksum: \"x\", yanked: false }") catch e { panic(e.msg); };
+    let (name, v) = try parse_line("Stone { name: \"geom\", vers: \"0.3.1\", deps: [{ name: \"num\", req: \"^1.2\", kind: \"normal\" }], source: Dep::git(\"https://github.com/o/geom\", rev: \"4f0c2a9e1b7d3c58a6e09f21d4b8c7a3e5f60123\"), cksum: \"x\", yanked: false, license: \"MIT\" }") catch e { panic(e.msg); };
     expect(name == "geom" && v.vers == "0.3.1" && v.deps.len() == 1 && v.deps[0].req == "^1.2", "fields");
+    expect(v.license == "MIT" && v.description.is_empty() && v.features.is_empty(), "meta");
     expect(v.url == "https://github.com/o/geom" && !v.yanked, "source");
     let bad = try parse_line("Stone { name: \"x\", vers: \"1.0.0\", deps: [], source: Dep::path(\"..\"), cksum: \"\", yanked: false }") catch _ { ("", v) };
     expect(bad.0.is_empty(), "path source rejected");

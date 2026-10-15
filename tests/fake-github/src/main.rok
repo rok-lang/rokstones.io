@@ -53,10 +53,11 @@ fn answer(s: TcpStream, secret: str) throws {
 
 fn main() throws {
     let args = env::args();
-    let l = try net::tcp_listen(args[1]);
-    for c in l.incoming() {
-        let s = try c.get();
-        try answer(s, args[2]) catch e { eprintln(f"fake github: {e}"); };
-        s.close();
+    using l = try net::tcp_listen(args[1]) {
+        for c in l.incoming() {
+            let s = try c.get();
+            try answer(s, args[2]) catch e { eprintln(f"fake github: {e}"); };
+            s.close();
+        }
     }
 }

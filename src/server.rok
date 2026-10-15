@@ -612,6 +612,7 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
         if !may_publish(owners, try index::exists(cfg.index, e.native, e.name), a.id, admin) {
             throw index::err(403, f"`{e.name}` belongs to other accounts");
         }
+        try index::check_source(cfg.data + "/sources", e);
         try index::publish(cfg.index, e, who);
         if owners is none {
             db.owners.push(Owner { name: k, accounts: [a.id] });
@@ -694,32 +695,33 @@ pub fn serve(site: Site) throws {
     try fs::create_dir_all(cfg.data);
     // Fail now on a bad data file, not on the first request.
     try load_db(cfg);
-    let l = try net::tcp_listen(cfg.addr);
-    eprintln(f"serving {site.out}/ and the API on http://{cfg.addr} for {cfg.url}");
-    STALE.store(1);
-    let ix = cfg.index;
-    let bg = thread::spawn(|| {
-        rebuild_loop(ix);
-        0
-    });
-    bg.detach();
-    for c in l.incoming() {
-        let s = try c.get() catch e {
-            eprintln(f"accept: {e}");
-            continue;
-        };
-        if ACTIVE.fetch_add(1) >= MAX_CONNS {
-            ACTIVE.fetch_sub(1);
-            try http::send(s, 503, ["Content-Type: text/plain; charset=utf-8"], "busy\n", false) catch _ {};
-            s.close();
-            continue;
-        }
-        let t = thread::spawn(|| {
-            handle(s, cfg, site);
-            ACTIVE.fetch_sub(1);
+    using l = try net::tcp_listen(cfg.addr) {
+        eprintln(f"serving {site.out}/ and the API on http://{cfg.addr} for {cfg.url}");
+        STALE.store(1);
+        let ix = cfg.index;
+        let bg = thread::spawn(|| {
+            rebuild_loop(ix);
             0
         });
-        t.detach();
+        bg.detach();
+        for c in l.incoming() {
+            let s = try c.get() catch e {
+                eprintln(f"accept: {e}");
+                continue;
+            };
+            if ACTIVE.fetch_add(1) >= MAX_CONNS {
+                ACTIVE.fetch_sub(1);
+                try http::send(s, 503, ["Content-Type: text/plain; charset=utf-8"], "busy\n", false) catch _ {};
+                s.close();
+                continue;
+            }
+            let t = thread::spawn(|| {
+                handle(s, cfg, site);
+                ACTIVE.fetch_sub(1);
+                0
+            });
+            t.detach();
+        }
     }
 }
 

@@ -162,17 +162,26 @@ pub fn read_request(s: TcpStream, max_body: usize, limit: Duration) throws (Http
 }
 
 pub fn reason(status: i32) -> str {
-    let all: List<(i32, str)> = [
-        (200, "OK"), (302, "Found"), (303, "See Other"), (400, "Bad Request"), (401, "Unauthorized"),
-        (403, "Forbidden"), (404, "Not Found"), (405, "Method Not Allowed"), (408, "Request Timeout"),
-        (409, "Conflict"), (413, "Content Too Large"), (415, "Unsupported Media Type"),
-        (431, "Request Header Fields Too Large"), (500, "Internal Server Error"), (501, "Not Implemented"),
-        (503, "Service Unavailable"), (505, "HTTP Version Not Supported"),
-    ];
-    for (k, v) in all {
-        if k == status { return v; }
+    match status {
+        200 => "OK",
+        302 => "Found",
+        303 => "See Other",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        413 => "Content Too Large",
+        415 => "Unsupported Media Type",
+        431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        503 => "Service Unavailable",
+        505 => "HTTP Version Not Supported",
+        _ => "Status",
     }
-    "Status"
 }
 
 /// Write a whole response; `head_only` for `HEAD`.
