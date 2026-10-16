@@ -25,6 +25,8 @@ use layout::dir_of;
 pub struct Site {
     pub title: str;
     pub tagline: str;
+    /// `<meta name="description">` of pages without one of their own.
+    pub description: str = "";
     /// Checkout of the index, relative to this file.
     pub index: str = "../rokstones.io-index";
     /// The index's web page (links to stone files, pull requests).
@@ -210,10 +212,11 @@ fn main() throws {
     let files: Dict<str, str> = Dict::new();
     let guide = markdown::render(try fs::read_to_str("pages/index.md"), layout::md(|h| h));
     files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all, guide.html)));
+    files.insert("404.html", layout::page(site, "404.html", "Not found", layout::not_found()));
     files.insert("stones/index.html", layout::page(site, "stones/index.html", "All stones", layout::all_stones(all)));
     for s in all {
         let out = layout::stone_out(s.name);
-        files.insert(out, layout::page(site, out, s.name, layout::stone_page(site, s, have)));
+        files.insert(out, layout::page_desc(site, out, s.name, s.desc, layout::stone_page(site, s, have)));
     }
 
     // Search index: every stone, its latest version and description.

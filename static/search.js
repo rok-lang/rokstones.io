@@ -8,6 +8,34 @@
     index ? Promise.resolve(index)
       : fetch(root + "search-index.json").then((r) => r.json()).then((d) => (index = d));
 
+  // A copy button on each code block.
+  for (const pre of document.querySelectorAll(".meta pre, article pre:not(.err)")) {
+    const wrap = document.createElement("div");
+    wrap.className = "code";
+    pre.replaceWith(wrap);
+    wrap.append(pre);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "copy";
+    b.textContent = "copy";
+    b.setAttribute("aria-label", "Copy code");
+    b.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(pre.innerText.replace(/\n$/, ""));
+        b.textContent = "copied ✓";
+      } catch {
+        b.textContent = "press ⌘C";
+      }
+      b.classList.add("done");
+      setTimeout(() => { b.textContent = "copy"; b.classList.remove("done"); }, 1600);
+    });
+    wrap.append(b);
+  }
+
+  // 404.html: name the missing path in the error.
+  const lost = document.getElementById("lost-path");
+  if (lost) lost.textContent = location.pathname;
+
   const emptyText = (data) => (data.length ? "No results" : "No stones published yet");
 
   const boxes = [...document.querySelectorAll(".search")];

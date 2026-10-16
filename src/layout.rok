@@ -36,16 +36,37 @@ fn short(rev: str) -> str { if rev.len() > 12 { rev[:12] } else { rev } }
 fn search_box(big: bool) -> str {
     let cls = if big { "search big" } else { "search" };
     let id = if big { "results-big" } else { "results" };
-    f"<div class=\"{cls}\" role=\"search\"><input class=\"q\" type=\"search\" placeholder=\"Search stones ( / )\" aria-label=\"Search stones\" autocomplete=\"off\" role=\"combobox\" aria-autocomplete=\"list\" aria-expanded=\"false\" aria-controls=\"{id}\"><ul id=\"{id}\" class=\"results\" role=\"listbox\" aria-label=\"Search results\" hidden></ul><p class=\"sr-only\" role=\"status\"></p></div>"
+    f"<div class=\"{cls}\" role=\"search\"><input class=\"q\" type=\"search\" placeholder=\"Search stones\" aria-label=\"Search stones\" aria-keyshortcuts=\"/\" autocomplete=\"off\" role=\"combobox\" aria-autocomplete=\"list\" aria-expanded=\"false\" aria-controls=\"{id}\"><kbd aria-hidden=\"true\">/</kbd><ul id=\"{id}\" class=\"results\" role=\"listbox\" aria-label=\"Search results\" hidden></ul><p class=\"sr-only\" role=\"status\"></p></div>"
 }
 
-pub fn page(site: Site, out: str, title: str, body: str) -> str {
-    let root = root_of(out);
+/// `s` cut to `n` characters, with an ellipsis if it was longer.
+fn clip(s: str, n: usize) -> str {
+    let out = StrBuf::new();
+    let k = 0usize;
+    for c in s.chars() {
+        if k == n {
+            out.push('…');
+            break;
+        }
+        out.push(c);
+        k += 1;
+    }
+    out.to_str()
+}
+
+/// `page` with a `<meta name="description">` of its own.
+pub fn page(site: Site, out: str, title: str, body: str) -> str { page_desc(site, out, title, "", body) }
+
+pub fn page_desc(site: Site, out: str, title: str, about: str, body: str) -> str {
+    // The 404 page is served for any missing path, so its links start at `/`.
+    let root = if out == "404.html" { "/" } else { root_of(out) };
     let home = out == "index.html";
     let all = if out == "stones/index.html" { " aria-current=\"page\"" } else { "" };
     let full = if home { site.title + " — " + site.tagline } else { title + " — " + site.title };
     let search = if home { "" } else { search_box(false) };
-    let kind = if home { "home" } else { "doc" };
+    let kind = if home { "home" } else if out == "stones/index.html" { "list" } else { "doc" };
+    let desc = esc(if about.is_empty() { site.description } else { clip(about, 160) });
+    let url = if home { site.base_url + "/" } else { site.base_url + "/" + out };
     // Heading permalinks are aria-hidden, so keep them out of the tab order too.
     let body = body.replace("class=\"anchor\" href=", "class=\"anchor\" tabindex=\"-1\" href=");
     f"<!doctype html>
@@ -54,14 +75,26 @@ pub fn page(site: Site, out: str, title: str, body: str) -> str {
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
 <title>{esc(full)}</title>
-<link rel=\"canonical\" href=\"{esc(site.base_url)}/{esc(out)}\">
+<meta name=\"description\" content=\"{desc}\">
+<link rel=\"canonical\" href=\"{esc(url)}\">
+<meta property=\"og:type\" content=\"website\">
+<meta property=\"og:site_name\" content=\"{esc(site.title)}\">
+<meta property=\"og:title\" content=\"{esc(full)}\">
+<meta property=\"og:description\" content=\"{desc}\">
+<meta property=\"og:url\" content=\"{esc(url)}\">
+<meta property=\"og:image\" content=\"{esc(site.base_url)}/og.png\">
+<meta name=\"twitter:card\" content=\"summary_large_image\">
+<meta name=\"theme-color\" content=\"#fcfbfd\" media=\"(prefers-color-scheme: light)\">
+<meta name=\"theme-color\" content=\"#15151b\" media=\"(prefers-color-scheme: dark)\">
 <link rel=\"stylesheet\" href=\"{root}style.css\">
-<link rel=\"icon\" href=\"{root}logo.png\">
+<link rel=\"icon\" href=\"{root}logo.svg\" type=\"image/svg+xml\">
+<link rel=\"icon\" href=\"{root}favicon.ico\" sizes=\"32x32\">
+<link rel=\"apple-touch-icon\" href=\"{root}apple-touch-icon.png\">
 </head>
 <body class=\"{kind}\" data-root=\"{root}\">
 <a class=\"skip\" href=\"#content\">Skip to content</a>
 <header class=\"top\">
-<a class=\"brand\" href=\"{root}index.html\"><img src=\"{root}logo.png\" alt=\"\" width=\"28\" height=\"28\">{esc(site.title)}</a>
+<a class=\"brand\" href=\"{root}index.html\"><img src=\"{root}logo.svg\" alt=\"\" width=\"28\" height=\"28\"><span>{esc(site.title)}</span></a>
 <nav class=\"main-nav\" aria-label=\"Main\"><a href=\"{root}stones/index.html\"{all}>All stones</a><a href=\"{root}index.html#using-stones\">Using stones</a><a href=\"{root}index.html#publishing\">Publishing</a><a href=\"{esc(site.docs)}\">Docs ↗</a></nav>
 {search}
 </header>
@@ -69,8 +102,8 @@ pub fn page(site: Site, out: str, title: str, body: str) -> str {
 {body}
 </main>
 <footer>
-<p><a href=\"{esc(site.docs)}\">rok docs</a> · <a href=\"{esc(site.index_repo)}\">Registry index</a></p>
-<p>Built with a static site generator written in rok.</p>
+<ul class=\"links\"><li><a href=\"{esc(site.docs)}\">rok docs</a></li><li><a href=\"{esc(site.index_repo)}\">Registry index</a></li></ul>
+<p class=\"made\">built with a static site generator written in rok</p>
 </footer>
 <script src=\"{root}search.js\" defer></script>
 </body>
@@ -100,7 +133,7 @@ fn stone_list(out: str, xs: List<Stone>, notes: List<str>, empty: str) -> str {
 
 fn code(lang: str, body: str) -> str {
     let c = if lang == "rokon" { rok_syntax::highlight_rokon(body) } else { esc(body) };
-    f"<pre><code class=\"language-{lang}\">{c}</code></pre>"
+    f"<pre class=\"{lang}\"><code class=\"language-{lang}\">{c}</code></pre>"
 }
 
 // ---- landing ----
@@ -135,7 +168,7 @@ pub fn landing(site: Site, all: List<Stone>, guide: str) -> str {
     }
 
     f"<div class=\"hero\">
-<img src=\"logo.png\" alt=\"\" width=\"80\" height=\"80\">
+<img src=\"logo.svg\" alt=\"\" width=\"80\" height=\"80\">
 <h1>{esc(site.title)}</h1>
 <p class=\"lead\">{esc(site.tagline)}</p>
 {search_box(true)}
@@ -156,7 +189,8 @@ pub fn all_stones(all: List<Stone>) -> str {
     let out = "stones/index.html";
     let notes: List<str> = List::new();
     for s in all { notes.push(s.date); }
-    f"<article><h1>All stones</h1><p>{all.len()}, by name.</p></article>
+    let n = if all.len() == 1 { "1 stone" } else { f"{all.len()} stones" };
+    f"<article><h1>All stones</h1><p>{n}, sorted by name.</p></article>
 {stone_list(out, all, notes, "No stones published yet.")}
 "
 }
@@ -181,7 +215,7 @@ fn dep_list(out: str, have: Set<str>, deps: List<stones::Req>, kind: str) -> str
 
 fn version_row(v: Version, latest: str) -> str {
     let tags = StrBuf::new();
-    if v.vers == latest { tags.push_str(" <span class=\"tag\">latest</span>"); }
+    if v.vers == latest { tags.push_str(" <span class=\"tag latest\">latest</span>"); }
     if v.yanked { tags.push_str(" <span class=\"tag yanked\">yanked</span>"); }
     if stones::is_pre(v.vers) { tags.push_str(" <span class=\"tag\">pre-release</span>"); }
     let tree = stones::tree_link(v.url, v.rev);
@@ -201,9 +235,14 @@ pub fn stone_page(site: Site, s: Stone, have: Set<str>) -> str {
     let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
     let add = if stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
 
+    let install = if l.yanked {
+        "<section><h2>Install</h2><p class=\"empty\">Not installable: every version is yanked.</p></section>"
+    } else {
+        f"<section><h2>Install</h2>{code("sh", add)}<p>Or in <code>rok.rokon</code>:</p>{code("rokon", manifest)}</section>"
+    };
     let notice = if l.yanked { "<p class=\"warn\">All versions are yanked. New projects will not resolve this stone.</p>" } else { "" };
     let readme = if s.readme.is_empty() {
-        "<p class=\"empty\">Could not fetch the README (offline, or the repository has no README).</p>"
+        "<div class=\"empty-box\"><p>No README to show.</p><p>The build was offline, or the repository has none.</p></div>"
     } else {
         s.readme
     };
@@ -231,7 +270,8 @@ pub fn stone_page(site: Site, s: Stone, have: Set<str>) -> str {
 
     let tree = stones::tree_link(l.url, l.rev);
     let repo = stones::web_of(l.url);
-    let repo_html = if repo.is_empty() { f"<code>{esc(l.url)}</code>" } else { f"<a href=\"{esc(repo)}\">{esc(l.url)}</a>" };
+    let shown = esc(l.url.replace("https://", "")).replace("/", "/<wbr>");
+    let repo_html = if repo.is_empty() { f"<code class=\"url\">{shown}</code>" } else { f"<a class=\"url\" href=\"{esc(repo)}\">{shown}</a>" };
     let commit = if tree.is_empty() { f"<code>{short(l.rev)}</code>" } else { f"<a href=\"{esc(tree)}\"><code>{short(l.rev)}</code></a>" };
     let date = if s.date.is_empty() { "" } else { f"<dt>Last published</dt><dd>{esc(s.date)}</dd>" };
     let lic = if l.license.is_empty() { "" } else { f"<dt>License</dt><dd>{esc(l.license)}</dd>" };
@@ -242,14 +282,29 @@ pub fn stone_page(site: Site, s: Stone, have: Set<str>) -> str {
 {about}{notice}</div>
 <div class=\"stone\">
 <aside class=\"meta\" aria-label=\"Stone details\">
-<section><h2>Install</h2>{code("sh", add)}<p>Or in <code>rok.rokon</code>:</p>{code("rokon", manifest)}</section>
-<section><h2>Source</h2><dl><dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd>{commit}</dd><dt>tree hash</dt><dd><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{lic}{date}<dt>Index file</dt><dd><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\"><code>{esc(s.file)}</code></a></dd></dl></section>
+{install}
+<section><h2>Source</h2><dl><dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd>{commit}</dd><dt>Tree hash</dt><dd><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{lic}{date}<dt>Index file</dt><dd><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\"><code>{esc(s.file)}</code></a></dd></dl></section>
 <section><h2>Dependencies ({l.vers})</h2>{if deps.is_empty() { "<p class=\"empty\">None</p>" } else { deps }}{if dev.is_empty() { "" } else { f"<h3>Dev dependencies</h3>{dev}" }}</section>
 {features}<section><h2>Dependents</h2>{rdeps}</section>
 <section><h2>Versions ({s.versions.len()})</h2><ul class=\"versions\">{vs.to_str()}</ul></section>
 </aside>
 <article class=\"readme\">
 {readme}</article>
+</div>
+"
+}
+
+/// Body of `404.html`, a compiler-style error; search.js fills in the path.
+pub fn not_found() -> str {
+    "<div class=\"lost\">
+<img src=\"/logo.svg\" alt=\"\" width=\"88\" height=\"88\">
+<h1>Stone not found</h1>
+<p>Nothing is published at this address.</p>
+<pre class=\"err\"><code><span class=\"e\">error[E404]</span>: no such stone or page
+ <span class=\"g\">--&gt;</span> <span id=\"lost-path\">this address</span>
+  <span class=\"g\">|</span>
+  <span class=\"g\">=</span> <span class=\"h\">help</span>: search above with <kbd>/</kbd>, or browse <a href=\"/stones/index.html\">all stones</a></code></pre>
+<p><a href=\"/index.html\">← Home</a></p>
 </div>
 "
 }
