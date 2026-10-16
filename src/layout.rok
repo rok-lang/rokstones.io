@@ -35,7 +35,8 @@ fn short(rev: str) -> str { if rev.len() > 12 { rev[:12] } else { rev } }
 
 fn search_box(big: bool) -> str {
     let cls = if big { "search big" } else { "search" };
-    f"<div class=\"{cls}\"><input class=\"q\" type=\"search\" placeholder=\"Search stones ( / )\" aria-label=\"Search stones\" autocomplete=\"off\"><ul class=\"results\" hidden></ul></div>"
+    let id = if big { "results-big" } else { "results" };
+    f"<div class=\"{cls}\" role=\"search\"><input class=\"q\" type=\"search\" placeholder=\"Search stones ( / )\" aria-label=\"Search stones\" autocomplete=\"off\" role=\"combobox\" aria-autocomplete=\"list\" aria-expanded=\"false\" aria-controls=\"{id}\"><ul id=\"{id}\" class=\"results\" role=\"listbox\" aria-label=\"Search results\" hidden></ul><p class=\"sr-only\" role=\"status\"></p></div>"
 }
 
 pub fn page(site: Site, out: str, title: str, body: str) -> str {
@@ -45,6 +46,8 @@ pub fn page(site: Site, out: str, title: str, body: str) -> str {
     let full = if home { site.title + " — " + site.tagline } else { title + " — " + site.title };
     let search = if home { "" } else { search_box(false) };
     let kind = if home { "home" } else { "doc" };
+    // Heading permalinks are aria-hidden, so keep them out of the tab order too.
+    let body = body.replace("class=\"anchor\" href=", "class=\"anchor\" tabindex=\"-1\" href=");
     f"<!doctype html>
 <html lang=\"en\">
 <head>
@@ -56,12 +59,13 @@ pub fn page(site: Site, out: str, title: str, body: str) -> str {
 <link rel=\"icon\" href=\"{root}logo.png\">
 </head>
 <body class=\"{kind}\" data-root=\"{root}\">
+<a class=\"skip\" href=\"#content\">Skip to content</a>
 <header class=\"top\">
 <a class=\"brand\" href=\"{root}index.html\"><img src=\"{root}logo.png\" alt=\"\" width=\"28\" height=\"28\">{esc(site.title)}</a>
-<nav class=\"main-nav\"><a href=\"{root}stones/index.html\"{all}>All stones</a><a href=\"{root}index.html#using-stones\">Using stones</a><a href=\"{root}index.html#publishing\">Publishing</a><a href=\"{esc(site.docs)}\">Docs ↗</a></nav>
+<nav class=\"main-nav\" aria-label=\"Main\"><a href=\"{root}stones/index.html\"{all}>All stones</a><a href=\"{root}index.html#using-stones\">Using stones</a><a href=\"{root}index.html#publishing\">Publishing</a><a href=\"{esc(site.docs)}\">Docs ↗</a></nav>
 {search}
 </header>
-<main>
+<main id=\"content\">
 {body}
 </main>
 <footer>
@@ -237,7 +241,7 @@ pub fn stone_page(site: Site, s: Stone, have: Set<str>) -> str {
 <h1>{esc(s.name)} <span class=\"ver\">{esc(l.vers)}</span></h1>
 {about}{notice}</div>
 <div class=\"stone\">
-<aside class=\"meta\">
+<aside class=\"meta\" aria-label=\"Stone details\">
 <section><h2>Install</h2>{code("sh", add)}<p>Or in <code>rok.rokon</code>:</p>{code("rokon", manifest)}</section>
 <section><h2>Source</h2><dl><dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd>{commit}</dd><dt>tree hash</dt><dd><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{lic}{date}<dt>Index file</dt><dd><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\"><code>{esc(s.file)}</code></a></dd></dl></section>
 <section><h2>Dependencies ({l.vers})</h2>{if deps.is_empty() { "<p class=\"empty\">None</p>" } else { deps }}{if dev.is_empty() { "" } else { f"<h3>Dev dependencies</h3>{dev}" }}</section>

@@ -1,14 +1,14 @@
 ## What is a stone
 
-A **stone** is a rok package: one git repository with `lib.rok` and `rok.rokon` at its root. The registry is nothing more than a single git repository, the [index](https://github.com/rok-lang/rokstones.io-index). Each version points to a commit in the stone's own repository, and `rok` fetches that commit and verifies it by tree hash. There is no server hosting source tarballs.
+A **stone** is a rok package: one git repository with `rok.rokon` at its root and its sources in `src/`. The registry is nothing more than a single git repository, the [index](https://github.com/rok-lang/rokstones.io-index). Each version points to a commit in the stone's own repository, and `rok` fetches that commit and verifies it by tree hash. There is no server hosting source tarballs.
 
 ## Using stones
 
 Add a dependency with `rok add` in your project directory.
 
 ```sh
-rok add geom            # range compatible with the latest version (^0.3)
-rok add geom@^0.2       # explicit range
+rok add json            # range compatible with the latest version (^0.1.0)
+rok add http@^0.1       # explicit range
 ```
 
 `rok add` writes one line to `deps` in `rok.rokon`. You can also write it by hand.
@@ -18,12 +18,12 @@ Package {
     name: "app",
     version: "0.1.0",
     deps: {
-        "geom": Dep::version("^0.3"),
+        "json": Dep::version("^0.1.0"),
     },
 }
 ```
 
-The next `rok build` / `rok run` fetches the index, picks the highest version in range (excluding yanked ones), and pins it in `rok.lock`. In code, refer to it by the stone's name, as in `use geom::Shape;`.
+The next `rok build` / `rok run` fetches the index, picks the highest version in range (excluding yanked ones), and pins it in `rok.lock`. In code, refer to it by the stone's name, as in `use json::Value;`.
 
 Version requirements: `^1.2` (the default; a bare version means the same), `~1.2.3`, `=1.0.0`, `>=1.2, <2`, `1.*`, `*`.
 

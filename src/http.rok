@@ -336,7 +336,7 @@ fn heads() {
     expect(bad("GET / HTTP/1.1\r\nBad Name: x") == 400, "header name");
     expect(bad("GET /a b HTTP/1.1") == 400, "spaces");
     let neg = try parse_head("POST / HTTP/1.1\r\nContent-Length: -1") catch e { panic(e.msg); };
-    expect((try body_len(neg) catch e { 0usize }) == 0usize, "negative length rejected");
+    expect((try body_len(neg) catch _ { 0usize }) == 0usize, "negative length rejected");
 }
 
 #[test]

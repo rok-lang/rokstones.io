@@ -454,9 +454,9 @@ fn callback(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     using g = LOCK.lock() {
         let db = try load_db(cfg);
         let seen = false;
-        for a in db.accounts {
-            if a.id == id {
-                a.login = login;
+        for i in 0..db.accounts.len() {
+            if db.accounts[i].id == id {
+                db.accounts[i].login = login;
                 seen = true;
             }
         }

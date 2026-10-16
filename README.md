@@ -20,7 +20,7 @@ You need the rok toolchain (`rok`, `rokc`), `git`, and an index checkout. The de
 └── rokstones.io/          # this repository
 ```
 
-If you have no toolchain, build it first.
+If you have no toolchain, install one (`curl -fsSL https://rok-lang.org/install.sh | sh`, see [Getting Started](https://rok-lang.org/learn/01-getting-started.html)) or build it from source:
 
 ```bash
 cd ../rok
@@ -46,7 +46,7 @@ When the build finishes it prints the number of stones, the number of stones wit
 
 ## Sample index (`--demo`)
 
-The real index is still empty, so `fixtures/` holds samples for checking how the site looks.
+`fixtures/` holds a sample index for checking how the site looks without git or network access, with more stones and edge cases than the real index has.
 
 | Path | Contents |
 |------|----------|
@@ -159,6 +159,6 @@ Edit `site.rokon` (ROKON).
 | `pages/index.md` | Home page text (what a stone is, using stones, publishing) |
 | `static/`        | `style.css` (light / dark), `search.js`, logo |
 
-Markdown rendering (`render_untrusted` for READMEs) and code highlighting are handled by the stones [`markdown`](https://github.com/rok-lang/markdown) and [`rok-syntax`](https://github.com/rok-lang/rok-syntax) (path dependencies in `rok.rokon`). They become version dependencies once published to rokstones.io.
+Markdown rendering (`render_untrusted` for READMEs) and code highlighting are handled by the stones [`markdown`](https://github.com/rok-lang/markdown) and [`rok-syntax`](https://github.com/rok-lang/rok-syntax) (path dependencies in `rok.rokon`, on the checkouts under `../stones/`). They stay path dependencies until `rok.rokon` is switched to their rokstones.io versions.
 
 Recent publish order and dates are read from the index's git history (the last commit that changed each stone file). If the index is not a git repository, stones are ordered by name.

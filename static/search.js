@@ -8,25 +8,39 @@
     index ? Promise.resolve(index)
       : fetch(root + "search-index.json").then((r) => r.json()).then((d) => (index = d));
 
+  const emptyText = (data) => (data.length ? "No results" : "No stones published yet");
+
   const boxes = [...document.querySelectorAll(".search")];
 
   for (const wrap of boxes) {
     const q = wrap.querySelector(".q");
     const box = wrap.querySelector(".results");
+    const status = wrap.querySelector("[role=status]");
     let sel = -1;
     const links = () => [...box.querySelectorAll("a")];
 
     const mark = (i) => {
       const as = links();
-      as.forEach((a, k) => a.classList.toggle("sel", k === i));
+      as.forEach((a, k) => a.setAttribute("aria-selected", k === i ? "true" : "false"));
       sel = i;
-      if (as[i]) as[i].scrollIntoView({ block: "nearest" });
+      if (as[i]) {
+        q.setAttribute("aria-activedescendant", as[i].id);
+        as[i].scrollIntoView({ block: "nearest" });
+      } else {
+        q.removeAttribute("aria-activedescendant");
+      }
+    };
+
+    const show = (on) => {
+      box.hidden = !on;
+      q.setAttribute("aria-expanded", on ? "true" : "false");
+      if (!on) q.removeAttribute("aria-activedescendant");
     };
 
     const search = async () => {
       const query = q.value.trim().toLowerCase();
       const terms = query.split(/\s+/).filter(Boolean);
-      if (!terms.length) { box.hidden = true; return; }
+      if (!terms.length) { show(false); status.textContent = ""; return; }
       const data = await load();
       const hits = [];
       for (const e of data) {
@@ -37,9 +51,13 @@
       }
       hits.sort((a, b) => a[0] - b[0] || a[1].t.localeCompare(b[1].t));
       box.replaceChildren();
-      for (const [, e] of hits.slice(0, 40)) {
+      hits.slice(0, 40).forEach(([, e], k) => {
         const li = document.createElement("li");
+        li.setAttribute("role", "none");
         const a = document.createElement("a");
+        a.id = box.id + "-" + k;
+        a.setAttribute("role", "option");
+        a.tabIndex = -1;
         a.href = root + e.u;
         a.textContent = e.t + " ";
         const v = document.createElement("code");
@@ -52,14 +70,16 @@
         }
         li.append(a);
         box.append(li);
-      }
+      });
       if (!hits.length) {
         const li = document.createElement("li");
+        li.setAttribute("role", "none");
         li.className = "empty";
-        li.textContent = data.length ? "No results" : "No stones published yet";
+        li.textContent = emptyText(data);
         box.append(li);
       }
-      box.hidden = false;
+      show(true);
+      status.textContent = !hits.length ? emptyText(data) : hits.length > 40 ? `40 of ${hits.length} results shown` : hits.length === 1 ? "1 result" : `${hits.length} results`;
       mark(hits.length ? 0 : -1);
     };
 
@@ -70,10 +90,10 @@
       if (ev.key === "ArrowDown" && n) { ev.preventDefault(); mark((sel + 1) % n); }
       else if (ev.key === "ArrowUp" && n) { ev.preventDefault(); mark((sel - 1 + n) % n); }
       else if (ev.key === "Enter" && links()[sel]) { location.href = links()[sel].href; }
-      else if (ev.key === "Escape") { box.hidden = true; q.blur(); }
+      else if (ev.key === "Escape") { show(false); q.blur(); }
     });
     document.addEventListener("click", (ev) => {
-      if (!wrap.contains(ev.target)) box.hidden = true;
+      if (!wrap.contains(ev.target)) show(false);
     });
   }
 
