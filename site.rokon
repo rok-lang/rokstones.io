@@ -6,7 +6,7 @@ Site {
     index: "../rokstones.io-index",
     index_repo: "https://github.com/rok-lang/rokstones.io-index",
     base_url: "https://rokstones.io",
-    docs: "https://rok-lang.org",
+    docs: "https://docs.rok-lang.org",
     cache: ".cache",
     out: "public",
 }

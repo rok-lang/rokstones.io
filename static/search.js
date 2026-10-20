@@ -24,12 +24,35 @@
         await navigator.clipboard.writeText(pre.innerText.replace(/\n$/, ""));
         b.textContent = "copied ✓";
       } catch {
-        b.textContent = "press ⌘C";
+        b.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "press ⌘C" : "press Ctrl+C";
       }
       b.classList.add("done");
       setTimeout(() => { b.textContent = "copy"; b.classList.remove("done"); }, 1600);
     });
     wrap.append(b);
+  }
+
+  // Theme button: auto (the system setting) → light → dark. The choice
+  // is this reader's alone, so it lives in localStorage; the inline
+  // script in <head> applies it before the page paints.
+  const tb = document.querySelector(".theme");
+  if (tb) {
+    const order = ["auto", "light", "dark"];
+    const glyph = { auto: "◐", light: "☀", dark: "☾" };
+    const get = () => { try { return localStorage.getItem("theme") || "auto"; } catch { return "auto"; } };
+    const show = (t) => {
+      tb.textContent = glyph[t];
+      tb.setAttribute("aria-label", `Theme: ${t}`);
+      tb.title = `Theme: ${t}`;
+    };
+    show(get());
+    tb.addEventListener("click", () => {
+      const t = order[(order.indexOf(get()) + 1) % order.length];
+      try { t === "auto" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); } catch {}
+      if (t === "auto") delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = t;
+      show(t);
+    });
   }
 
   // 404.html: name the missing path in the error.

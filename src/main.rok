@@ -32,7 +32,9 @@ pub struct Site {
     /// The index's web page (links to stone files, pull requests).
     pub index_repo: str;
     pub base_url: str = "https://rokstones.io";
-    pub docs: str = "https://rok-lang.org";
+    pub docs: str = "https://docs.rok-lang.org";
+    /// The language's home site.
+    pub home: str = "https://rok-lang.org";
     /// README cache (git objects and extracted READMEs).
     pub cache: str = ".cache";
     pub out: str = "public";
@@ -216,7 +218,8 @@ fn main() throws {
     files.insert("stones/index.html", layout::page(site, "stones/index.html", "All stones", layout::all_stones(all)));
     for s in all {
         let out = layout::stone_out(s.name);
-        files.insert(out, layout::page_desc(site, out, s.name, s.desc, layout::stone_page(site, s, have)));
+        let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a rok stone" } else { s.desc };
+        files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s, have)));
     }
 
     // Search index: every stone, its latest version and description.
@@ -233,6 +236,17 @@ fn main() throws {
     let out_root = site.out + ".new";
     if fs::exists(out_root) { try fs::remove_dir_all(out_root); }
     for out in files.keys() { try write(out_root, out, files[out]); }
+    let urls: List<str> = List::new();
+    for out in files.keys() {
+        if out != "404.html" { urls.push(site.base_url + "/" + if out == "index.html" { "" } else { out }); }
+    }
+    urls.sort();
+    let map = StrBuf::new();
+    map.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+    for u in urls { map.push_str(f"<url><loc>{markdown::esc(u)}</loc></url>\n"); }
+    map.push_str("</urlset>\n");
+    try write(out_root, "sitemap.xml", map.to_str());
+    try write(out_root, "robots.txt", f"User-agent: *\nDisallow: /me\nSitemap: {site.base_url}/sitemap.xml\n");
     try write(out_root, "search-index.json", sx.to_str());
     let statics: Set<str> = Set::new();
     statics.insert("search-index.json");

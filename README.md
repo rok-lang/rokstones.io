@@ -20,7 +20,7 @@ You need the rok toolchain (`rok`, `rokc`), `git`, and an index checkout. The de
 └── rokstones.io/          # this repository
 ```
 
-If you have no toolchain, install one (`curl -fsSL https://rok-lang.org/install.sh | sh`, see [Getting Started](https://rok-lang.org/learn/01-getting-started.html)) or build it from source:
+If you have no toolchain, install one (`curl -fsSL https://rok-lang.org/install.sh | sh`, see [Getting Started](https://docs.rok-lang.org/latest/learn/01-getting-started.html)) or build it from source:
 
 ```bash
 cd ../rok
@@ -140,7 +140,7 @@ Edit `site.rokon` (ROKON).
 | `index`      | Index checkout (default `../rokstones.io-index`) |
 | `index_repo` | Web URL of the index repository (stone file links, pull request instructions) |
 | `base_url`   | Site URL (`https://rokstones.io`), used for canonical links |
-| `docs`       | Language docs URL (`https://rok-lang.org`) |
+| `docs`       | Language docs URL (`https://docs.rok-lang.org`) |
 | `cache`      | README cache directory (default `.cache`) |
 | `out`        | Output directory (default `public`) |
 

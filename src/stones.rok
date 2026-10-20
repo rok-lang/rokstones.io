@@ -420,7 +420,7 @@ fn first_para(html: str, n: usize) -> str {
         out.push(c);
         k += 1;
     }
-    out.to_str().trim_end() + "…"
+    out.to_str().trim_end() + "..."
 }
 
 // ---- the index ----

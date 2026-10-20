@@ -18,6 +18,8 @@
   --glow-1: rgb(244 114 182 / .28);
   --glow-2: rgb(56 189 248 / .24);
   --shadow: 0 1px 2px rgb(30 20 50 / .06), 0 8px 24px rgb(30 20 50 / .08);
+  /* Popups: the page in light, a step up in dark. */
+  --raised: var(--bg);
   --k: #be185d;
   --t: #0e7490;
   --s: #4d7c0f;
@@ -30,7 +32,7 @@
   --caution: #b84036;
   --tip: #24774d;
 
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
+  --mono: "rok-mono-math", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
   --sans: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
 
   /* Type scale: 16px base, ratio 1.25, rounded to the 4px grid. */
@@ -63,8 +65,10 @@
   color-scheme: light dark;
 }
 
+/* Dark: by the system setting unless the reader picked light, or by the
+   reader's pick (search.js sets data-theme on <html>). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #15151b;
     --fg: #e6e5ec;
     --muted: #9c9eab;
@@ -93,7 +97,51 @@
     --warning: #e0b057;
     --caution: #ef8478;
     --tip: #6fcf97;
+    --raised: var(--panel);
+    color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #15151b;
+  --fg: #e6e5ec;
+  --muted: #9c9eab;
+  --line: #2b2b35;
+  --line-strong: #6a6a78;
+  --panel: #1c1c24;
+  --code-bg: #1e1e27;
+  --accent: #7dd3fc;
+  --accent-soft: #0c2c40;
+  --accent-2: #f9a8d4;
+  --accent-2-deep: #fbcfe8;
+  --accent-2-soft: #3b1a2e;
+  --on-accent: #15151b;
+  --focus: #f472b6;
+  --glow-1: rgb(244 114 182 / .22);
+  --glow-2: rgb(56 189 248 / .18);
+  --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 12px 32px rgb(0 0 0 / .45);
+  --k: #f9a8d4;
+  --t: #67e8f9;
+  --s: #a3d977;
+  --n: #fdba74;
+  --c: #8a8c99;
+  --a: #f472b6;
+  --note: #7dd3fc;
+  --important: #f9a8d4;
+  --warning: #e0b057;
+  --caution: #ef8478;
+  --tip: #6fcf97;
+  --raised: var(--panel);
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
+
+/* ui-monospace (SF Mono) has no √ ∘ ∪ ...: take them from a mono font that
+   does, so tables in <pre> keep their columns. */
+@font-face {
+  font-family: "rok-mono-math";
+  src: local("Menlo"), local("DejaVu Sans Mono"), local("Cascadia Mono"), local("Consolas");
+  unicode-range: U+2190-21FF, U+2200-22FF, U+2300-23FF, U+25A0-25FF;
 }
 
 * { box-sizing: border-box; }
@@ -265,12 +313,11 @@ kbd {
   margin: 0;
   padding: var(--sp-1);
   list-style: none;
-  background: var(--bg);
+  background: var(--raised);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow);
 }
-@media (prefers-color-scheme: dark) { .results { background: var(--panel); } }
 .results a { display: block; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); color: var(--fg); line-height: 1.4; }
 .results a:hover, .results a[aria-selected="true"] { background: var(--accent-soft); text-decoration: none; color: var(--fg); }
 .results code { color: var(--muted); font-size: var(--fs-sm); }
@@ -285,6 +332,24 @@ kbd {
   font: 600 var(--fs-xs)/1.7 var(--mono);
 }
 .results .empty { padding: var(--sp-2) var(--sp-3); color: var(--muted); }
+
+.theme {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  font: 16px/1 var(--sans);
+  cursor: pointer;
+}
+.theme:hover { color: var(--accent-2); border-color: var(--accent-2); }
+.main-nav + .theme { margin-left: auto; }
+@media (pointer: coarse) { .theme { width: var(--target); height: var(--target); } }
 
 /* article */
 
@@ -368,6 +433,8 @@ pre code { font-size: 1em; }
 .copy.done { color: var(--tip); border-color: var(--tip); }
 @media (pointer: coarse) {
   .copy { opacity: 1; min-height: 32px; padding: 0 var(--sp-3); }
+  /* The button is always shown here: keep the first line clear of it. */
+  .code > pre { padding-top: 48px; }
 }
 @media (prefers-reduced-motion: no-preference) {
   .copy { transition: opacity 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out; }
@@ -395,6 +462,8 @@ article :is(pre, .code):has(+ pre.output) + pre.output { border-top: 1px dashed 
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 th, td { padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); vertical-align: top; }
+/* Code in a cell stays whole; the table scrolls instead. */
+:is(td, th) > code { overflow-wrap: normal; white-space: nowrap; }
 th { background: var(--panel); text-align: left; }
 
 blockquote { margin-left: 0; padding: 0 var(--sp-4); border-left: 3px solid var(--line); color: var(--muted); }
@@ -447,9 +516,13 @@ footer {
 footer p { margin: var(--sp-1) 0; }
 footer a { display: inline-block; padding: 2px 0; }
 footer .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 var(--sp-3); margin: 0 0 var(--sp-2); padding: 0; list-style: none; }
-footer .links li + li::before { content: "·"; margin-right: var(--sp-3); color: var(--line-strong); }
+/* The dot ends a line rather than starting one. */
+footer .links li:not(:last-child)::after { content: "·"; margin-left: var(--sp-3); color: var(--line-strong); }
+footer p { text-wrap: balance; }
 footer .made { font-family: var(--mono); font-size: var(--fs-xs); }
 footer .made::before { content: "// "; color: var(--accent-2); }
+footer .by { margin: var(--sp-3) 0 var(--sp-1); }
+footer .by a { font-weight: 600; }
 
 @media (prefers-reduced-motion: no-preference) {
   .main-nav a, .cta a, .card, .pager a, .side a, .stones a, .results a {
@@ -561,6 +634,9 @@ h1, h2, h3 { line-height: 1.25; }
 .tag { padding: 0 var(--sp-2); border: 1px solid var(--line-strong); border-radius: 999px; font-size: var(--fs-xs); line-height: 1.6; color: var(--muted); }
 .tag.latest { border-color: transparent; background: var(--accent-2-soft); color: var(--accent-2); font-weight: 600; }
 .tag.yanked { border-color: var(--caution); color: var(--caution); }
+.stones .yanked .name, .stones .yanked .ver { color: var(--muted); text-decoration: line-through; }
+.stones .tag { margin-left: 6px; }
+.stone-head .ver.yanked { background: var(--panel); color: var(--muted); text-decoration: line-through; }
 
 /* small screens */
 
@@ -569,7 +645,10 @@ h1, h2, h3 { line-height: 1.25; }
   /* Brand and search on one row, the nav a scrolling strip below. */
   .top { position: relative; flex-wrap: wrap; gap: 0 var(--sp-3); padding: var(--sp-2) var(--sp-4) 0; }
   .brand { min-height: var(--target); }
-  .top > .search { order: 1; flex: 1; min-width: 0; margin: 0; }
+  .theme { order: 1; }
+  .main-nav + .theme { margin-left: auto; }
+  /* Above the nav strip, whose mask makes it a stacking context. */
+  .top > .search { order: 1; flex: 1; min-width: 0; margin: 0; position: relative; z-index: 2; }
   .top > .search .q { width: 100%; height: 40px; }
   .main-nav {
     order: 2;
