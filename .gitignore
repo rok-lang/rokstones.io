@@ -5,3 +5,9 @@ target/
 .cache/
 .DS_Store
 .env
+
+# Terraform
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate
+deploy/terraform/*.tfstate.*
+deploy/terraform/.terraform.tfstate.lock.info
