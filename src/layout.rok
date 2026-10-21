@@ -180,6 +180,11 @@ pub fn landing(site: Site, all: List<Stone>, guide: str) -> str {
 {search_box(true)}
 <p class=\"stats\"><strong>{all.len()}</strong> stones · <strong>{vers}</strong> versions · <a href=\"stones/index.html\">View all</a></p>
 </div>
+<ol class=\"how\" aria-label=\"How a stone gets into your code\">
+<li><code><b>$</b> rok add json</code><span>writes the dependency to <code>rok.rokon</code></span></li>
+<li><code><b>$</b> rok build</code><span>fetches the newest matching version and pins it in <code>rok.lock</code></span></li>
+<li><code>use json::Value;</code><span>and it is in your code</span></li>
+</ol>
 <div class=\"columns\">
 <section><h2>Recently published</h2>{stone_list(out, rs, rn, "No stones published yet.")}</section>
 <section><h2>Most depended on</h2>{stone_list(out, ps, pn, "No stone has dependents yet.")}</section>

@@ -1,0 +1,28 @@
+#!/bin/sh
+# First boot: install Caddy and git, make the service user and data
+# directories. deploy/deploy.sh then ships the binary and the index
+# checkout, writes .env, and starts the service. Nothing serves until then.
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -q
+apt-get install -y -q caddy git rsync
+
+id rokstones >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin rokstones
+install -d -o rokstones -g rokstones /var/lib/rokstones /srv/rokstones
+
+cat > /etc/caddy/Caddyfile <<CADDY
+${domain} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=()"
+		X-Content-Type-Options "nosniff"
+	}
+	# Overwrite X-Forwarded-For with the real peer so a client cannot forge it.
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}
+CADDY
+systemctl reload caddy || systemctl restart caddy

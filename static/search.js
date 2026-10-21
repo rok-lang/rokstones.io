@@ -59,6 +59,19 @@
   const lost = document.getElementById("lost-path");
   if (lost) lost.textContent = location.pathname;
 
+  // `text` as nodes, each search term in it wrapped in <mark>.
+  const marked = (text, terms) => {
+    const words = terms.filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    if (!words.length) return [document.createTextNode(text)];
+    const re = new RegExp(`(${words.join("|")})`, "gi");
+    return text.split(re).map((part, k) => {
+      if (k % 2 === 0) return document.createTextNode(part);
+      const m = document.createElement("mark");
+      m.textContent = part;
+      return m;
+    });
+  };
+
   const emptyText = (data) => (data.length ? "No results" : "No stones published yet");
 
   const boxes = [...document.querySelectorAll(".search")];
@@ -110,7 +123,7 @@
         a.setAttribute("role", "option");
         a.tabIndex = -1;
         a.href = root + e.u;
-        a.textContent = e.t + " ";
+        a.append(...marked(e.t, terms), " ");
         const v = document.createElement("code");
         v.textContent = e.v;
         a.append(v);

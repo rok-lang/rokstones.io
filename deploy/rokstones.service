@@ -1,0 +1,25 @@
+# Installed by deploy/deploy.sh at /etc/systemd/system/rokstones.service.
+# Serves the registry site and API; rebuilds the site when the index
+# changes and commits/pushes publishes to the index checkout.
+[Unit]
+Description=rokstones.io registry site and API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=rokstones
+WorkingDirectory=/srv/rokstones
+EnvironmentFile=/srv/rokstones/.env
+# ROKSTONES_ADDR=127.0.0.1:8080 (Caddy fronts it), ROKSTONES_DATA,
+# ROKSTONES_INDEX, GITHUB_CLIENT_ID/SECRET, ROKSTONES_ADMINS come from .env.
+ExecStart=/srv/rokstones/rokstones_io serve
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/rokstones /var/lib/rokstones
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

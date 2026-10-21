@@ -299,6 +299,10 @@ kbd {
   font-size: var(--fs-base);
 }
 .search input::placeholder { color: var(--muted); opacity: 1; }
+/* No native search widgets (the webkit clear ×, decoration) on the pill. */
+.search input { appearance: none; -webkit-appearance: none; }
+.search input::-webkit-search-cancel-button,
+.search input::-webkit-search-decoration { -webkit-appearance: none; display: none; }
 .search input:focus-visible { outline-offset: 1px; }
 .search kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; }
 .search input:is(:focus, :not(:placeholder-shown)) + kbd { display: none; }
@@ -331,6 +335,7 @@ kbd {
   color: var(--accent-2);
   font: 600 var(--fs-xs)/1.7 var(--mono);
 }
+.results mark { padding: 0 1px; border-radius: 3px; background: var(--accent-2-soft); color: var(--accent-2); }
 .results .empty { padding: var(--sp-2) var(--sp-3); color: var(--muted); }
 
 .theme {
@@ -578,6 +583,14 @@ h1, h2, h3 { line-height: 1.25; }
 .search.big kbd { right: var(--sp-4); }
 .search.big .results { left: 0; right: 0; width: auto; }
 .stats { margin: var(--sp-4) 0 0; color: var(--muted); }
+/* How a stone gets into your code: three steps joined by arrows. */
+.how { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-5); margin: var(--sp-6) 0 0; padding: 0; list-style: none; counter-reset: step; }
+.how li { position: relative; padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); counter-increment: step; }
+.how li::before { content: counter(step); position: absolute; top: calc(-1 * var(--sp-3)); left: var(--sp-4); display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-2); color: var(--on-accent); font: 700 var(--fs-xs)/1 var(--mono); }
+.how li + li::after { content: "→"; position: absolute; left: calc(-1 * var(--sp-5) + 4px); top: 50%; transform: translateY(-50%); color: var(--accent-2); font: 700 var(--fs-md) var(--mono); }
+.how li > code { display: block; margin: var(--sp-1) 0 var(--sp-2); padding: 0; background: none; box-shadow: none; font-weight: 600; }
+.how b { color: var(--accent-2); }
+.how span { color: var(--muted); font-size: var(--fs-sm); }
 .stats strong { color: var(--fg); font-variant-numeric: tabular-nums; }
 .stats a { display: inline-block; padding: 2px 0; }
 .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--sp-4) var(--sp-6); margin: var(--sp-6) 0 var(--sp-2); }
@@ -666,6 +679,8 @@ h1, h2, h3 { line-height: 1.25; }
   .results a { min-height: var(--target); }
   main { padding: var(--sp-5) var(--sp-4) var(--sp-7); }
   .stones a { padding: var(--sp-3); }
+  .how { grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); }
+  .how li + li::after { content: "↓"; left: 50%; top: calc(-1 * var(--sp-5) + 2px); transform: translateX(-50%); }
   .stone { grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
   .stone .readme, .meta { grid-column: 1; grid-row: auto; }
   .anchor { display: none; }
