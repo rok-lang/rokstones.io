@@ -196,7 +196,6 @@ pub fn send<B: AsBytes>(s: TcpStream, status: i32, headers: List<str>, body: B, 
     if !head_only { try s.write_all(bytes); }
 }
 
-// ---- forms, cookies, URLs ----
 
 fn hexval(b: u8) -> i32 {
     if b >= 48u8 && b <= 57u8 { return (b - 48u8) as i32; }
@@ -269,7 +268,6 @@ pub fn cookie(r: Request, name: str) -> str {
     ""
 }
 
-// ---- static files ----
 
 pub fn content_type(path: str) -> str {
     let ext = match path.rfind(".") {
@@ -279,9 +277,10 @@ pub fn content_type(path: str) -> str {
     match ext {
         "html" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
-        "js" => "text/javascript; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
         "json" => "application/json",
-        "txt" | "md" => "text/plain; charset=utf-8",
+        "wasm" => "application/wasm",
+        "txt" | "md" | "rok" | "rokon" => "text/plain; charset=utf-8",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",

@@ -40,9 +40,8 @@ pub struct Site {
     pub out: str = "public";
 }
 
-// ---- paths ----
 
-/// `a/./b/../c` → `a/c`; leading `..` kept.
+/// `a/./b/../c` -> `a/c`; leading `..` kept.
 fn norm(p: str) -> str {
     let segs: List<str> = List::new();
     for s in p.split("/") {
@@ -73,6 +72,8 @@ fn json_str(s: str) -> str {
             out.push_str("\\\"");
         } else if c == '\\' {
             out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
         } else if (c as u32) < 0x20u32 {
             out.push(' ');
         } else {
@@ -89,7 +90,6 @@ fn write(root: str, path: str, data: str) throws {
     try fs::write(full, data);
 }
 
-// ---- link check ----
 
 /// Every value of `name="..."` in `html`.
 fn attr_values(cs: List<char>, name: str) -> List<str> {
@@ -164,7 +164,6 @@ fn check(files: Dict<str, str>, statics: Set<str>) -> List<str> {
     bad
 }
 
-// ---- build ----
 
 fn main() throws {
     let t0 = Instant::now();

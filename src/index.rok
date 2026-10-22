@@ -31,7 +31,6 @@ pub fn err(status: i32, msg: str) -> ApiError { ApiError { status: status, msg: 
 
 fn bad(msg: str) -> ApiError { err(400, msg) }
 
-// ---- names and versions (as the `rok` client) ----
 
 /// One package up to case and `-` / `_`.
 pub fn key(name: str) -> str { name.to_lowercase().replace("-", "_") }
@@ -137,7 +136,6 @@ fn is_hex(s: str, lens: List<usize>) -> bool {
     true
 }
 
-// ---- entries ----
 
 /// What an API publish adds: the entry's name, version, index file and line.
 pub struct Entry {
@@ -219,7 +217,7 @@ fn str_list(v: Value, what: str) throws (ApiError) -> List<str> {
 }
 
 /// A stone's `features` table against its normal dependencies (`normal`:
-/// name → optional), as the client's manifest check does.
+/// name -> optional), as the client's manifest check does.
 fn check_features(v: Value, normal: Dict<str, bool>) throws (ApiError) {
     let Value::Dict(d) = v else { throw bad("`features` is a dict of name → list"); };
     let table: OrderedDict<str, List<str>> = OrderedDict::new();
@@ -252,7 +250,7 @@ fn check_features(v: Value, normal: Dict<str, bool>) throws (ApiError) {
             }
         }
     }
-    // Feature → feature entries form no cycle: 1 visiting, 2 done.
+    // Feature -> feature entries form no cycle: 1 visiting, 2 done.
     let state: Dict<str, i32> = Dict::new();
     for start in table.keys() { try no_cycle(table, start, state); }
     for (dn, opt) in normal {
@@ -412,7 +410,6 @@ pub fn parse_entry(body: str) throws (ApiError) -> Entry {
     throw bad("the body is a `Stone { .. }` or `Native { .. }` index entry");
 }
 
-// ---- the checkout ----
 
 /// `git args..` in `dir`; its stdout. A failure is logged (git's stderr
 /// holds no secrets of ours) and thrown as `status`.

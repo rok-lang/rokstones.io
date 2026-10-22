@@ -54,6 +54,40 @@ fn clip(s: str, n: usize) -> str {
     out.to_str()
 }
 
+/// `<head>` from the charset to the icons. `root` leads to the icons and
+/// stylesheet, `url` is the canonical address, `img` the og:image.
+fn head(site: Site, root: str, full: str, desc: str, url: str, img: str, extra: str) -> str {
+    f"<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<title>{esc(full)}</title>
+<script>try{{const t=localStorage.getItem(\"theme\");if(t)document.documentElement.dataset.theme=t}}catch(e){{}}</script>
+<meta name=\"description\" content=\"{desc}\">
+<link rel=\"canonical\" href=\"{esc(url)}\">
+{extra}<meta property=\"og:type\" content=\"website\">
+<meta property=\"og:site_name\" content=\"{esc(site.title)}\">
+<meta property=\"og:title\" content=\"{esc(full)}\">
+<meta property=\"og:description\" content=\"{desc}\">
+<meta property=\"og:url\" content=\"{esc(url)}\">
+<meta property=\"og:image\" content=\"{esc(img)}\">
+<meta name=\"twitter:card\" content=\"summary_large_image\">
+<meta name=\"theme-color\" content=\"#fcfbfd\" media=\"(prefers-color-scheme: light)\">
+<meta name=\"theme-color\" content=\"#15151b\" media=\"(prefers-color-scheme: dark)\">
+<link rel=\"stylesheet\" href=\"{root}style.css\">
+<link rel=\"icon\" href=\"{root}logo.svg\" type=\"image/svg+xml\">
+<link rel=\"icon\" href=\"{root}favicon.ico\" sizes=\"32x32\">
+<link rel=\"apple-touch-icon\" href=\"{root}apple-touch-icon.png\">
+"
+}
+
+fn footer(links: str) -> str {
+    f"<footer>
+<ul class=\"links\">{links}</ul>
+<p class=\"by\">Made and maintained by <a href=\"https://daminstudio.com\">DaminStudio</a></p>
+<p class=\"made\">built with a static site generator written in rok</p>
+</footer>
+"
+}
+
 /// `page` with a `<meta name="description">` of its own.
 pub fn page(site: Site, out: str, title: str, body: str) -> str { page_desc(site, out, title, "", body) }
 
@@ -72,49 +106,25 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str) -> str
     f"<!doctype html>
 <html lang=\"en\">
 <head>
-<meta charset=\"utf-8\">
-<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-<title>{esc(full)}</title>
-<script>try{{const t=localStorage.getItem(\"theme\");if(t)document.documentElement.dataset.theme=t}}catch(e){{}}</script>
-<meta name=\"description\" content=\"{desc}\">
-<link rel=\"canonical\" href=\"{esc(url)}\">
-<meta property=\"og:type\" content=\"website\">
-<meta property=\"og:site_name\" content=\"{esc(site.title)}\">
-<meta property=\"og:title\" content=\"{esc(full)}\">
-<meta property=\"og:description\" content=\"{desc}\">
-<meta property=\"og:url\" content=\"{esc(url)}\">
-<meta property=\"og:image\" content=\"{esc(site.base_url)}/og.png\">
-<meta name=\"twitter:card\" content=\"summary_large_image\">
-<meta name=\"theme-color\" content=\"#fcfbfd\" media=\"(prefers-color-scheme: light)\">
-<meta name=\"theme-color\" content=\"#15151b\" media=\"(prefers-color-scheme: dark)\">
-<link rel=\"stylesheet\" href=\"{root}style.css\">
-<link rel=\"icon\" href=\"{root}logo.svg\" type=\"image/svg+xml\">
-<link rel=\"icon\" href=\"{root}favicon.ico\" sizes=\"32x32\">
-<link rel=\"apple-touch-icon\" href=\"{root}apple-touch-icon.png\">
-</head>
+{head(site, root, full, desc, url, site.base_url + "/og.png", "")}</head>
 <body class=\"{kind}\" data-root=\"{root}\">
 <a class=\"skip\" href=\"#content\">Skip to content</a>
 <header class=\"top\">
 <a class=\"brand\" href=\"{root}index.html\"><img src=\"{root}logo.svg\" alt=\"\" width=\"28\" height=\"28\"><span>{esc(site.title)}</span></a>
-<nav class=\"main-nav\" aria-label=\"Main\"><a href=\"{root}stones/index.html\"{all}>All stones</a><a href=\"{root}index.html#using-stones\">Using stones</a><a href=\"{root}index.html#publishing\">Publishing</a><a href=\"{esc(site.docs)}\">Docs ↗</a></nav>
+<button class=\"nav-toggle\" type=\"button\" aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav\"><span class=\"bars\"></span></button>
+<nav id=\"nav\" class=\"main-nav\" aria-label=\"Main\"><a href=\"{root}stones/index.html\"{all}>All stones</a><a href=\"{root}index.html#using-stones\">Using stones</a><a href=\"{root}index.html#publishing\">Publishing</a><a href=\"{esc(site.docs)}\">Docs ↗</a></nav>
 {search}
 <button class=\"theme\" type=\"button\" aria-label=\"Theme\">◐</button>
 </header>
 <main id=\"content\">
 {body}
 </main>
-<footer>
-<ul class=\"links\"><li><a href=\"{esc(site.home)}\">rok-lang.org</a></li><li><a href=\"{esc(site.docs)}\">rok docs</a></li><li><a href=\"{esc(site.index_repo)}\">Registry index</a></li></ul>
-<p class=\"by\">Made and maintained by <a href=\"https://daminstudio.com\">DaminStudio</a></p>
-<p class=\"made\">built with a static site generator written in rok</p>
-</footer>
-<script src=\"{root}search.js\" defer></script>
+{footer(f"<li><a href=\"{esc(site.home)}\">rok-lang.org</a></li><li><a href=\"{esc(site.docs)}\">rok docs</a></li><li><a href=\"{esc(site.index_repo)}\">Registry index</a></li>")}<script src=\"{root}search.js\" defer></script>
 </body>
 </html>
 "
 }
 
-// ---- pieces ----
 
 /// `<li>` of a stone in a list, linking from `out`.
 fn stone_item(out: str, s: Stone, note: str) -> str {
@@ -142,7 +152,6 @@ fn code(lang: str, body: str) -> str {
     f"<pre class=\"{lang}\"><code class=\"language-{lang}\">{c}</code></pre>"
 }
 
-// ---- landing ----
 
 pub fn landing(site: Site, all: List<Stone>, guide: str) -> str {
     let out = "index.html";
@@ -194,7 +203,6 @@ pub fn landing(site: Site, all: List<Stone>, guide: str) -> str {
 "
 }
 
-// ---- stone list ----
 
 pub fn all_stones(all: List<Stone>) -> str {
     let out = "stones/index.html";
@@ -206,7 +214,6 @@ pub fn all_stones(all: List<Stone>) -> str {
 "
 }
 
-// ---- stone page ----
 
 fn dep_list(out: str, have: Set<str>, deps: List<stones::Req>, kind: str) -> str {
     let b = StrBuf::new();
