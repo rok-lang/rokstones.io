@@ -34,7 +34,6 @@ const MAX_CONNS: i32 = 256;
 const SESSION_SECS: i64 = 2592000;
 const MAX_TOKENS: usize = 20;
 
-// ---- configuration ----
 
 /// Settings from the environment, then `.env`.
 pub struct Cfg {
@@ -104,7 +103,6 @@ pub fn is_admin(cfg: Cfg, login: str) -> bool {
     !login.is_empty() && cfg.admins.contains("," + login.to_lowercase() + ",")
 }
 
-// ---- the data file ----
 
 #[derive(Rokon)]
 pub struct Account {
@@ -215,7 +213,6 @@ fn owners_of(db: Db, k: str) -> List<i64> | none {
     none
 }
 
-// ---- responses ----
 
 pub struct Resp {
     pub status: i32;
@@ -287,7 +284,6 @@ fn message(site: Site, path: str, status: i32, title: str, text: str) -> Resp {
     page(site, path, title, f"<h1>{esc(title)}</h1>\n<p>{esc(text)}</p>\n<p><a href=\"/\">Home</a></p>", status)
 }
 
-// ---- GitHub ----
 
 /// A curl config value, quoted.
 fn cq(s: str) -> str {
@@ -425,7 +421,6 @@ fn github_user(cfg: Cfg, code: str) throws (ApiError) -> (i64, str) {
     (id, login)
 }
 
-// ---- HTML routes ----
 
 fn login(cfg: Cfg) throws -> Resp {
     let state = try secret::random_hex(16);
@@ -563,7 +558,6 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     redirect("/me", [])
 }
 
-// ---- API ----
 
 #[derive(Rokon)]
 pub struct Yank {
@@ -629,7 +623,6 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     rokon_resp(200, "Yanked", [("name", Value::Str(y.name)), ("vers", Value::Str(y.vers)), ("yanked", Value::Bool(!y.undo))])
 }
 
-// ---- dispatch ----
 
 fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let p = r.path;

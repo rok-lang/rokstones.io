@@ -136,7 +136,7 @@
 }
 :root[data-theme="light"] { color-scheme: light; }
 
-/* ui-monospace (SF Mono) has no √ ∘ ∪ ...: take them from a mono font that
+/* ui-monospace (SF Mono) lacks some math glyphs (sqrt, compose, union): take them from a mono font that
    does, so tables in <pre> keep their columns. */
 @font-face {
   font-family: "rok-mono-math";
@@ -299,7 +299,7 @@ kbd {
   font-size: var(--fs-base);
 }
 .search input::placeholder { color: var(--muted); opacity: 1; }
-/* No native search widgets (the webkit clear ×, decoration) on the pill. */
+/* No native search widgets (the webkit clear x, decoration) on the pill. */
 .search input { appearance: none; -webkit-appearance: none; }
 .search input::-webkit-search-cancel-button,
 .search input::-webkit-search-decoration { -webkit-appearance: none; display: none; }
@@ -355,6 +355,43 @@ kbd {
 .theme:hover { color: var(--accent-2); border-color: var(--accent-2); }
 .main-nav + .theme { margin-left: auto; }
 @media (pointer: coarse) { .theme { width: var(--target); height: var(--target); } }
+
+/* The hamburger: bars drawn in CSS (no font glyph), shown only when the
+   nav collapses. The middle bar is the span; the two others are its
+   pseudo-elements, which cross into an X when the menu is open. */
+.nav-toggle {
+  display: none;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.nav-toggle:hover { color: var(--accent-2); border-color: var(--accent-2); }
+.nav-toggle .bars, .nav-toggle .bars::before, .nav-toggle .bars::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.nav-toggle .bars { position: relative; }
+.nav-toggle .bars::before { position: absolute; left: 0; top: -6px; }
+.nav-toggle .bars::after { position: absolute; left: 0; top: 6px; }
+.top.nav-open .nav-toggle .bars { background: transparent; }
+.top.nav-open .nav-toggle .bars::before { top: 0; transform: rotate(45deg); }
+.top.nav-open .nav-toggle .bars::after { top: 0; transform: rotate(-45deg); }
+@media (prefers-reduced-motion: no-preference) {
+  .nav-toggle .bars, .nav-toggle .bars::before, .nav-toggle .bars::after {
+    transition: transform 160ms ease, background-color 120ms ease, top 160ms ease;
+  }
+}
 
 /* article */
 
@@ -420,21 +457,61 @@ pre code { font-size: 1em; }
 /* A code block with its copy button (search.js wraps it). */
 .code { position: relative; }
 .code > pre { margin: 0; }
-.copy {
+/* try and copy ride in a header strip at the top-right, a fixed gap apart. */
+.code-tools {
   position: absolute;
-  top: var(--sp-2);
+  top: 4px;
   right: var(--sp-2);
+  z-index: 2;
+  display: flex;
+  gap: var(--sp-2);
+}
+.copy {
   padding: 2px var(--sp-2);
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--bg);
   color: var(--muted);
-  font: 600 var(--fs-xs)/1.6 var(--mono);
+  font: 600 var(--fs-xs)/1.6 var(--sans);
   cursor: pointer;
   opacity: 0;
 }
 .code:hover .copy, .copy:focus-visible, .copy.done { opacity: 1; }
 .copy:hover { color: var(--accent-2); border-color: var(--accent-2); }
+
+/* A language'd block is a little macOS window: the border and rounding
+   move to the wrapper so the title bar and code read as one pane. */
+.code[data-lang] {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--code-bg);
+}
+.code[data-lang] > pre {
+  border: 0;
+  border-radius: 0;
+  padding-top: var(--sp-4);
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 36px;
+  padding: 0 var(--sp-4);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+/* The traffic lights, same palette as the terminal windows. */
+.code-head .lights { flex: 0 0 auto; display: flex; gap: 6px; margin-right: var(--sp-2); }
+.code-head .lights i { width: 11px; height: 11px; border-radius: 50%; background: #f9a8d4; }
+.code-head .lights i + i { background: #7dd3fc; }
+.code-head .lights i + i + i { background: #3a3a46; }
+.code-title { color: var(--muted); font: 600 var(--fs-xs) var(--mono); letter-spacing: 0.02em; }
+/* In the bar the tools are a static flex item and always shown. */
+.code-head .code-tools { position: static; margin-left: auto; }
+.code-head .copy { opacity: 1; }
+/* Joined to an output block below: square the shared edge. */
+.code[data-lang]:has(+ pre.output) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .copy.done { color: var(--tip); border-color: var(--tip); }
 @media (pointer: coarse) {
   .copy { opacity: 1; min-height: 32px; padding: 0 var(--sp-3); }
@@ -653,30 +730,46 @@ h1, h2, h3 { line-height: 1.25; }
 
 /* small screens */
 
+/* The header folds into the hamburger exactly when the full nav would no
+   longer fit on one row. search.js measures that (forcing the row not to
+   wrap or shrink) and toggles .nav-compact, so the same rule serves any
+   number of links on any page -- no per-page width breakpoint. */
+.top.nav-measuring { flex-wrap: nowrap; }
+.top.nav-measuring > * { flex-shrink: 0; }
+.top.nav-measuring .main-nav { flex-wrap: nowrap; flex-shrink: 0; }
+
+.top.nav-compact { position: relative; flex-wrap: wrap; gap: 0 var(--sp-3); padding: var(--sp-2) var(--sp-4); }
+.nav-compact .brand { min-height: var(--target); }
+.nav-compact .nav-toggle { display: inline-grid; order: 0; margin-left: auto; }
+.nav-compact .theme { order: 0; margin-left: var(--sp-2); }
+.top.nav-compact > .search { order: 1; flex: 0 0 100%; min-width: 0; margin: var(--sp-2) 0 0; position: relative; z-index: 2; }
+.top.nav-compact > .search .q { width: 100%; height: 40px; }
+.nav-compact .main-nav {
+  order: 3;
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  right: var(--sp-4);
+  min-width: 220px;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2);
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow);
+  z-index: 30;
+  display: none;
+}
+.top.nav-compact.nav-open .main-nav { display: flex; }
+.nav-compact .main-nav a { display: flex; align-items: center; min-height: var(--target); padding: 0 var(--sp-3); border-radius: var(--r-sm); white-space: nowrap; }
+.nav-compact .main-nav a:hover, .nav-compact .main-nav a:focus-visible { color: var(--accent-2); background: var(--panel); }
+.top.nav-compact > .search .results { position: fixed; left: var(--sp-4); right: var(--sp-4); top: 60px; width: auto; }
+.nav-compact .results a { min-height: var(--target); }
+
 @media (max-width: 860px) {
   html { scroll-padding-top: var(--sp-4); }
-  /* Brand and search on one row, the nav a scrolling strip below. */
-  .top { position: relative; flex-wrap: wrap; gap: 0 var(--sp-3); padding: var(--sp-2) var(--sp-4) 0; }
-  .brand { min-height: var(--target); }
-  .theme { order: 1; }
-  .main-nav + .theme { margin-left: auto; }
-  /* Above the nav strip, whose mask makes it a stacking context. */
-  .top > .search { order: 1; flex: 1; min-width: 0; margin: 0; position: relative; z-index: 2; }
-  .top > .search .q { width: 100%; height: 40px; }
-  .main-nav {
-    order: 2;
-    flex-wrap: nowrap;
-    width: calc(100% + 2 * var(--sp-4));
-    margin: var(--sp-1) calc(-1 * var(--sp-4)) 0;
-    padding: 0 var(--sp-2);
-    overflow-x: auto;
-    scrollbar-width: none;
-    mask-image: linear-gradient(90deg, transparent, #000 var(--sp-3), #000 calc(100% - var(--sp-6)), transparent);
-  }
-  .main-nav::-webkit-scrollbar { display: none; }
-  .main-nav a { display: inline-flex; align-items: center; min-height: var(--target); padding: 0 var(--sp-2); }
-  .top > .search .results { position: fixed; left: var(--sp-4); right: var(--sp-4); top: 60px; width: auto; }
-  .results a { min-height: var(--target); }
+}
+@media (max-width: 860px) {
   main { padding: var(--sp-5) var(--sp-4) var(--sp-7); }
   .stones a { padding: var(--sp-3); }
   .how { grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); }

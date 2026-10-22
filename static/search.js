@@ -8,10 +8,15 @@
     index ? Promise.resolve(index)
       : fetch(root + "search-index.json").then((r) => r.json()).then((d) => (index = d));
 
-  // A copy button on each code block.
+  // A copy button on each code block; article blocks get a macOS-style
+  // title bar (traffic lights + language), the sidebar snippets stay plain.
   for (const pre of document.querySelectorAll(".meta pre, article pre:not(.err)")) {
     const wrap = document.createElement("div");
     wrap.className = "code";
+    const tools = document.createElement("div");
+    tools.className = "code-tools";
+    const lang = (pre.querySelector("code")?.className.match(/language-(\w+)/) || [])[1];
+    if (lang && lang !== "text" && !pre.closest(".meta")) wrap.dataset.lang = lang;
     pre.replaceWith(wrap);
     wrap.append(pre);
     const b = document.createElement("button");
@@ -29,10 +34,25 @@
       b.classList.add("done");
       setTimeout(() => { b.textContent = "copy"; b.classList.remove("done"); }, 1600);
     });
-    wrap.append(b);
+    tools.append(b);
+    if (wrap.dataset.lang) {
+      const head = document.createElement("div");
+      head.className = "code-head";
+      const lights = document.createElement("span");
+      lights.className = "lights";
+      lights.setAttribute("aria-hidden", "true");
+      for (let i = 0; i < 3; i++) lights.append(document.createElement("i"));
+      const title = document.createElement("span");
+      title.className = "code-title";
+      title.textContent = wrap.dataset.lang;
+      head.append(lights, title, tools);
+      wrap.prepend(head);
+    } else {
+      wrap.append(tools);
+    }
   }
 
-  // Theme button: auto (the system setting) → light → dark. The choice
+  // Theme button: auto (the system setting) -> light -> dark. The choice
   // is this reader's alone, so it lives in localStorage; the inline
   // script in <head> applies it before the page paints.
   const tb = document.querySelector(".theme");
@@ -53,6 +73,43 @@
       else document.documentElement.dataset.theme = t;
       show(t);
     });
+  }
+
+  // Compact header: the hamburger opens the nav as a drop panel. It
+  // closes on a link, an outside click, Escape, or a return to the full nav.
+  const top = document.querySelector(".top");
+  const navToggle = document.querySelector(".nav-toggle");
+  const nav = document.getElementById("nav");
+  if (top && navToggle && nav) {
+    const setNav = (open) => {
+      top.classList.toggle("nav-open", open);
+      navToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    navToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setNav(!top.classList.contains("nav-open"));
+    });
+    nav.addEventListener("click", (e) => { if (e.target.closest("a")) setNav(false); });
+    document.addEventListener("click", (e) => {
+      if (top.classList.contains("nav-open") && !e.target.closest(".nav-toggle, #nav")) setNav(false);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && top.classList.contains("nav-open")) { setNav(false); navToggle.focus(); }
+    });
+    // Collapse exactly when the full nav would not fit on one row: measure
+    // the natural width with the row forced not to wrap or shrink. Works
+    // for any number of links, so there is no per-page width breakpoint.
+    const fitNav = () => {
+      top.classList.remove("nav-compact");
+      top.classList.add("nav-measuring");
+      const overflow = top.scrollWidth > top.clientWidth + 1;
+      top.classList.remove("nav-measuring");
+      if (overflow) top.classList.add("nav-compact");
+      else setNav(false);
+    };
+    fitNav();
+    addEventListener("resize", fitNav);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitNav);
   }
 
   // 404.html: name the missing path in the error.
