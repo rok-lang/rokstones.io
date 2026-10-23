@@ -1,7 +1,7 @@
 # Contributing
 
-This repository is a website built with rok. The generator reads the spec and
-standard-library sources and checks every internal link; see the README for the
+This repository is a website built with rok. The generator reads a checkout of
+the registry index and checks every internal link; see the README for the
 full build.
 
 ## Development
