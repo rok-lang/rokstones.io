@@ -15,7 +15,7 @@ You need the rok toolchain (`rok`, `rokc`), `git`, and an index checkout. The de
 ./
 ├── rok/                   # toolchain (github.com/rok-lang/rok)
 ├── rokstones.io-index/    # registry index
-├── stones/markdown/   # markdown renderer stone (path dependency)
+├── stones/markdown/       # markdown renderer stone (path dependency)
 ├── stones/rok-syntax/     # rok / ROKON highlighter stone (path dependency)
 └── rokstones.io/          # this repository
 ```
@@ -137,10 +137,12 @@ Edit `site.rokon` (ROKON).
 |--------------|---------|
 | `title`      | Site name |
 | `tagline`    | Home page subtitle |
+| `description`| `<meta name="description">` for pages without their own (default empty) |
 | `index`      | Index checkout (default `../rokstones.io-index`) |
 | `index_repo` | Web URL of the index repository (stone file links, pull request instructions) |
 | `base_url`   | Site URL (`https://rokstones.io`), used for canonical links |
 | `docs`       | Language docs URL (`https://docs.rok-lang.org`) |
+| `home`       | Language home site for the footer link (default `https://rok-lang.org`) |
 | `cache`      | README cache directory (default `.cache`) |
 | `out`        | Output directory (default `public`) |
 
