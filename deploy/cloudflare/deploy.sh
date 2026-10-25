@@ -12,5 +12,5 @@ here=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$here"
 shift 2>/dev/null || true
 rok run "$@"
-wrangler pages deploy public --config deploy/cloudflare/wrangler.toml --branch main
+wrangler pages deploy public --project-name rokstones-io --branch main
 echo "deployed rokstones.io (static). The API is on the backend (deploy/terraform)."
