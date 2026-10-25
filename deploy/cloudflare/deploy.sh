@@ -14,5 +14,7 @@ cd "$here"
 # shift past $# as a fatal special-builtin error (bypassing `|| true`).
 [ $# -gt 0 ] && shift || true
 rok run "$@"
+# Create the Pages project on the first deploy; a no-op once it exists.
+wrangler pages project create rokstones-io --production-branch main 2>/dev/null || true
 wrangler pages deploy public --project-name rokstones-io --branch main
 echo "deployed rokstones.io (static). The API is on the backend (deploy/terraform)."
