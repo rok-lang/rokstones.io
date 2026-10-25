@@ -25,9 +25,11 @@ ssh "$host" "sudo install -d -o rokstones -g rokstones /srv/rokstones"
 rsync -a "$bin" "$host:/tmp/rokstones_io"
 rsync -a --delete "$here/public/" "$host:/tmp/rokstones-public/"
 rsync -a "$here/deploy/rokstones.service" "$host:/tmp/rokstones.service"
+rsync -a "$here/site.rokon" "$host:/tmp/rokstones-site.rokon"
 ssh "$host" "sudo sh -s" <<'REMOTE'
 set -eu
 install -o rokstones -g rokstones /tmp/rokstones_io /srv/rokstones/rokstones_io
+install -o rokstones -g rokstones /tmp/rokstones-site.rokon /srv/rokstones/site.rokon
 rm -rf /srv/rokstones/public && mv /tmp/rokstones-public /srv/rokstones/public
 chown -R rokstones:rokstones /srv/rokstones/public
 test -f /srv/rokstones/.env || { echo "missing /srv/rokstones/.env (copy from .env.example)"; exit 1; }
