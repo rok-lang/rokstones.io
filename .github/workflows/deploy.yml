@@ -1,28 +1,48 @@
 name: deploy
 
-# Build rokstones.io's static registry site and push it to Cloudflare Pages
-# on every change to main. Needs repo secrets CLOUDFLARE_API_TOKEN and
-# CLOUDFLARE_ACCOUNT_ID (a token with Account > Cloudflare Pages: Edit).
-# The dynamic API runs on the backend (deploy/, EC2) and is released there.
+# Deploy rokstones to its EC2 origin (which serves both the static registry
+# pages and the dynamic API/auth). A push to main rebuilds the static site
+# and ships it (rsync public/ + restart). A manual run with full=true also
+# rebuilds the server binary (rare). A CDN can sit in front for edge caching.
+#
+# Access (set once, EC2 only — never the home boxes):
+#   - OIDC: the rok-ci-deploy IAM role trusts this repo; it may authorize/
+#     revoke the security group's port 22.
+#   - secrets.ROK_DEPLOY_KEY: the CI SSH private key, whose public key is in
+#     the box's ubuntu authorized_keys.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      full:
+        description: "Rebuild the server binary too (otherwise static only)."
+        type: boolean
+        default: false
 
 concurrency:
-  group: deploy
-  cancel-in-progress: true
+  group: deploy-rokstones
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  EIP: 54.204.70.72
+  SG: sg-0cc6c5ea1027f890b
+  ROLE: arn:aws:iam::893677554379:role/rok-ci-deploy
+  REGION: us-east-1
+  TOOLCHAIN: aarch64-unknown-linux-gnu
 
 jobs:
-  pages:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout site
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           path: rokstones.io
-      - name: Checkout the registry index
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: rok-lang/rokstones.io-index
           path: rokstones.io-index
@@ -31,12 +51,64 @@ jobs:
         run: |
           curl -fsSL https://rok-lang.org/install.sh | sh
           echo "$HOME/.rok/bin" >> "$GITHUB_PATH"
-      - name: Install wrangler
-        run: npm install -g wrangler@4
-
-      - name: Build and deploy
+      - name: Build the static site
         working-directory: rokstones.io
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: deploy/cloudflare/deploy.sh
+        run: rok run
+      - name: Build the server (full)
+        if: ${{ inputs.full }}
+        working-directory: rokstones.io
+        run: |
+          rok build --release --target "$TOOLCHAIN"
+          mkdir -p target/release
+          cp "target/$TOOLCHAIN/release/rokstones_io" target/release/rokstones_io
+
+      - name: AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE }}
+          aws-region: ${{ env.REGION }}
+
+      - name: SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.ROK_DEPLOY_KEY }}" > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+
+      - name: Open SSH to this runner
+        run: |
+          IP=$(curl -fsS https://api.ipify.org)
+          aws ec2 authorize-security-group-ingress --group-id "$SG" \
+            --protocol tcp --port 22 --cidr "$IP/32" --region "$REGION"
+          echo "RUNNER_CIDR=$IP/32" >> "$GITHUB_ENV"
+          for i in $(seq 1 10); do
+            ssh-keyscan -T 5 -H "$EIP" >> ~/.ssh/known_hosts 2>/dev/null && break || sleep 3
+          done
+
+      - name: Deploy static (push / default)
+        if: ${{ ! inputs.full }}
+        working-directory: rokstones.io
+        run: |
+          rsync -az --delete -e "ssh -i ~/.ssh/id" public/ "ubuntu@$EIP:/tmp/rks-public/"
+          ssh -i ~/.ssh/id "ubuntu@$EIP" '
+            sudo rsync -a --delete /tmp/rks-public/ /srv/rokstones/public/ &&
+            sudo chown -R rokstones:rokstones /srv/rokstones/public &&
+            sudo systemctl restart rokstones && sleep 1 &&
+            systemctl --no-pager status rokstones | head -3'
+
+      - name: Deploy full (manual)
+        if: ${{ inputs.full }}
+        working-directory: rokstones.io
+        run: |
+          cat > ~/.ssh/config <<CFG
+          Host $EIP
+            IdentityFile ~/.ssh/id
+            IdentitiesOnly yes
+          CFG
+          chmod 600 ~/.ssh/config
+          deploy/deploy.sh "ubuntu@$EIP"
+
+      - name: Close SSH (always)
+        if: always()
+        run: |
+          [ -n "${RUNNER_CIDR:-}" ] && aws ec2 revoke-security-group-ingress --group-id "$SG" \
+            --protocol tcp --port 22 --cidr "$RUNNER_CIDR" --region "$REGION" || true
