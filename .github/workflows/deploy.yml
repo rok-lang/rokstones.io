@@ -39,7 +39,4 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          echo "PATH=$PATH"; command -v rok || echo "NO ROK"; rok --version || true
-          ls -la .. deploy/cloudflare
-          sh -x deploy/cloudflare/deploy.sh
+        run: deploy/cloudflare/deploy.sh

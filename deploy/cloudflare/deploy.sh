@@ -10,7 +10,9 @@
 set -eu
 here=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$here"
-shift 2>/dev/null || true
+# Drop the optional `--` separator; guard the shift because dash treats a
+# shift past $# as a fatal special-builtin error (bypassing `|| true`).
+[ $# -gt 0 ] && shift || true
 rok run "$@"
 wrangler pages deploy public --project-name rokstones-io --branch main
 echo "deployed rokstones.io (static). The API is on the backend (deploy/terraform)."
