@@ -1,7 +1,7 @@
 // Site configuration (read by main.rok).
 Site {
     title: "rokstones.io",
-    tagline: "The rok package registry",
+    tagline: "The Rok package registry",
     description: "rokstones.io is the registry of stones, rok's packages: find one, then add it with rok add <name>.",
     index: "../rokstones.io-index",
     index_repo: "https://github.com/rok-lang/rokstones.io-index",
