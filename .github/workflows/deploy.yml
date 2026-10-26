@@ -31,8 +31,8 @@ permissions:
 env:
   EIP: 54.204.70.72
   SG: sg-0cc6c5ea1027f890b
-  ROLE: arn:aws:iam::893677554379:role/rok-ci-deploy
-  REGION: us-east-1
+  AWS_ROLE: arn:aws:iam::893677554379:role/rok-ci-deploy
+  AWS_REGION: us-east-1
   TOOLCHAIN: aarch64-unknown-linux-gnu
   CF_ZONE: 2bdf0605414dcecb9a81f17b7a8b403c
 
@@ -66,8 +66,8 @@ jobs:
       - name: AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.ROLE }}
-          aws-region: ${{ env.REGION }}
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: SSH key
         run: |
@@ -79,7 +79,7 @@ jobs:
         run: |
           IP=$(curl -fsS https://api.ipify.org)
           aws ec2 authorize-security-group-ingress --group-id "$SG" \
-            --protocol tcp --port 22 --cidr "$IP/32" --region "$REGION"
+            --protocol tcp --port 22 --cidr "$IP/32" --region "$AWS_REGION"
           echo "RUNNER_CIDR=$IP/32" >> "$GITHUB_ENV"
           for i in $(seq 1 10); do
             ssh-keyscan -T 5 -H "$EIP" >> ~/.ssh/known_hosts 2>/dev/null && break || sleep 3
@@ -122,4 +122,4 @@ jobs:
         if: always()
         run: |
           [ -n "${RUNNER_CIDR:-}" ] && aws ec2 revoke-security-group-ingress --group-id "$SG" \
-            --protocol tcp --port 22 --cidr "$RUNNER_CIDR" --region "$REGION" || true
+            --protocol tcp --port 22 --cidr "$RUNNER_CIDR" --region "$AWS_REGION" || true
