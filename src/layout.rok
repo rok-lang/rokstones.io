@@ -113,7 +113,7 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str) -> str
 <header class=\"top\">
 <a class=\"brand\" href=\"{root}index.html\"><img src=\"{root}logo.svg\" alt=\"\" width=\"28\" height=\"28\"><span>{esc(site.title)}</span></a>
 <button class=\"nav-toggle\" type=\"button\" aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav\"><span class=\"bars\"></span></button>
-<nav id=\"nav\" class=\"main-nav\" aria-label=\"Main\"><a href=\"{root}stones/index.html\"{all}>All stones</a><a href=\"{root}index.html#using-stones\">Using stones</a><a href=\"{root}index.html#publishing\">Publishing</a><a href=\"{esc(site.docs)}\">Docs ↗</a></nav>
+<nav id=\"nav\" class=\"main-nav\" aria-label=\"Main\"><a href=\"{root}stones/index.html\"{all}>All stones</a><a href=\"{root}index.html#using-stones\">Using stones</a><a href=\"{root}index.html#publishing\">Publishing</a><a href=\"{esc(site.docs)}\">Docs ↗</a><a href=\"{esc(site.home)}\">rok-lang.org ↗</a></nav>
 {search}
 <button class=\"theme\" type=\"button\" aria-label=\"Theme\">◐</button>
 </header>
