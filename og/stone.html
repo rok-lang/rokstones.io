@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face{font-family:'InterOG';src:url('fonts/inter-500.woff2') format('woff2');font-weight:500;font-display:block}
+  @font-face{font-family:'InterOG';src:url('fonts/inter-700.woff2') format('woff2');font-weight:700;font-display:block}
+  @font-face{font-family:'InterOG';src:url('fonts/inter-800.woff2') format('woff2');font-weight:800;font-display:block}
+  @font-face{font-family:'JBMonoOG';src:url('fonts/jbmono-500.woff2') format('woff2');font-weight:500;font-display:block}
+  @font-face{font-family:'JBMonoOG';src:url('fonts/jbmono-600.woff2') format('woff2');font-weight:600;font-display:block}
+  @font-face{font-family:'JBMonoOG';src:url('fonts/jbmono-700.woff2') format('woff2');font-weight:700;font-display:block}
+  :root{--fg:#1e1f26;--muted:#5b5e6b;--pink:#be185d;--pink2:#db2777;--cyan:#38bdf8;
+    --sans:'InterOG',system-ui,sans-serif;--mono:'JBMonoOG',ui-monospace,monospace;}
+  *{margin:0;padding:0;box-sizing:border-box}
+  .pill,.tcode,.eyebrow,.badge .v{font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
+  html,body{width:1200px;height:630px;overflow:hidden}
+  .stage{position:relative;width:1200px;height:630px;font-family:var(--sans);
+    background:
+      radial-gradient(1100px 760px at -5% -10%, #fde3ef 0%, rgba(253,227,239,0) 55%),
+      radial-gradient(1200px 820px at 112% 118%, #dcefff 0%, rgba(220,239,255,0) 55%),
+      linear-gradient(135deg,#fdf6fb 0%, #fcfbfd 48%, #eff8ff 100%);}
+  .grid{position:absolute;inset:0;background-image:radial-gradient(rgba(130,120,150,.13) 1.6px, transparent 1.7px);
+    background-size:34px 34px;background-position:17px 17px;
+    -webkit-mask-image:linear-gradient(135deg,rgba(0,0,0,.9),rgba(0,0,0,.25));}
+  .spark{position:absolute}
+  .logo{position:absolute;left:92px;top:74px;width:96px;height:96px;filter:drop-shadow(0 14px 22px rgba(190,24,93,.22))}
+  .eyebrow{position:absolute;left:206px;top:92px;font-family:var(--mono);font-weight:700;font-size:25px;color:var(--pink);letter-spacing:.5px}
+  .eyebrow .reg{color:var(--muted);font-weight:600}
+  .name{position:absolute;left:86px;top:206px;font-size:128px;font-weight:800;letter-spacing:-5px;color:var(--fg);line-height:1}
+  .desc{position:absolute;left:92px;top:366px;width:1016px;font-size:34px;font-weight:500;color:var(--muted);letter-spacing:-.3px;line-height:1.32;
+    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .pill{position:absolute;left:90px;top:500px;display:flex;align-items:center;background:#fff;border:1px solid #efd9e6;border-radius:16px;
+    padding:20px 26px;box-shadow:0 10px 30px rgba(120,70,110,.10);font-family:var(--mono);font-size:27px;font-weight:600;color:var(--fg)}
+  .pill b{color:var(--pink);margin-right:14px;font-weight:700}
+  .term{position:absolute;left:700px;top:486px;width:470px;height:118px;background:#17171f;border-radius:14px;
+    box-shadow:0 26px 60px rgba(20,10,30,.30);overflow:hidden}
+  .tbar{height:38px;display:flex;align-items:center;padding:0 16px;gap:8px}
+  .dot{width:13px;height:13px;border-radius:50%}
+  .tcode{padding:2px 20px;font-family:var(--mono);font-size:20px;line-height:1.5;color:#e6e5ec;white-space:pre}
+  .tcode .p{color:#f9a8d4} .tcode .g{color:#86efac}
+  .badge{position:absolute;left:1058px;top:96px;width:118px;height:118px;border-radius:50%;background:#fde3ef;border:2px dashed var(--pink2);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;transform:rotate(-8deg);box-shadow:0 10px 24px rgba(219,39,119,.18)}
+  .badge .v{font-family:var(--mono);font-weight:700;font-size:28px;color:var(--pink)}
+  .badge .h{font-size:16px;color:var(--pink2);font-style:italic;margin-top:1px}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="grid"></div>
+  <div class="spark" style="left:636px;top:300px"><svg width="26" height="26" viewBox="0 0 24 24" fill="#f472b6"><path d="M12 0c1 6 5 10 12 12-7 2-11 6-12 12-1-6-5-10-12-12 7-2 11-6 12-12z"/></svg></div>
+  <div class="spark" style="left:980px;top:420px"><svg width="22" height="22" viewBox="0 0 24 24" fill="#38bdf8"><path d="M12 0c1 6 5 10 12 12-7 2-11 6-12 12-1-6-5-10-12-12 7-2 11-6 12-12z"/></svg></div>
+
+  <img class="logo" src="logo.svg" alt="">
+  <div class="eyebrow">{{EYEBROW}}</div>
+  <div class="name">{{NAME}}</div>
+  <div class="desc">{{DESC}}</div>
+  <div class="pill"><b>$</b> rok add {{CMD}}</div>
+
+  <div class="term">
+    <div class="tbar">
+      <span class="dot" style="background:#f472b6"></span>
+      <span class="dot" style="background:#38bdf8"></span>
+      <span class="dot" style="background:#3a3a46"></span>
+    </div>
+    <div class="tcode"><span class="p">$</span> rok add {{CMD}}
+  <span class="g">Added</span> {{CMD}} v{{VERS}}</div>
+  </div>
+
+  <div class="badge"><div class="v">v{{VERS}}</div><div class="h">{{BADGE}}</div></div>
+</div>
+</body>
+</html>

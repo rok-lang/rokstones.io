@@ -258,6 +258,11 @@ fn main() throws {
     let have: Set<str> = Set::new();
     for s in all { have.insert(s.name); }
 
+    // OG card manifest (name, version, description) for og/render.mjs.
+    let mani = "";
+    for s in all { mani = mani + s.name + "\t" + s.latest.vers + "\t" + s.desc.replace("\t", " ").replace("\n", " ") + "\n"; }
+    try fs::write("og/manifest.tsv", mani);
+
     let files: Dict<str, str> = Dict::new();
     let guide = markdown::render(try fs::read_to_str("pages/index.md"), layout::md(|h| h));
     files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all, guide.html)));
@@ -266,7 +271,8 @@ fn main() throws {
     for s in all {
         let out = layout::stone_out(s.name);
         let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a rok stone" } else { s.desc };
-        files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s, have)));
+        let og = site.base_url + "/og/" + s.name + ".png";
+        files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s, have), og));
     }
 
     // Search index: every stone, its latest version and description.

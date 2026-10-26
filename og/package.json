@@ -1,0 +1,7 @@
+{
+  "name": "rok-og",
+  "private": true,
+  "type": "module",
+  "description": "Renders Open Graph card images (1200x630) with headless Chrome.",
+  "dependencies": { "puppeteer-core": "^23.11.1" }
+}
