@@ -34,6 +34,7 @@ env:
   ROLE: arn:aws:iam::893677554379:role/rok-ci-deploy
   REGION: us-east-1
   TOOLCHAIN: aarch64-unknown-linux-gnu
+  CF_ZONE: 2bdf0605414dcecb9a81f17b7a8b403c
 
 jobs:
   deploy:
@@ -106,6 +107,16 @@ jobs:
           CFG
           chmod 600 ~/.ssh/config
           deploy/deploy.sh "ubuntu@$EIP"
+
+      - name: Purge the CDN cache
+        env:
+          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
+        run: |
+          curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE/purge_cache" \
+            -H "Authorization: Bearer $CF_PURGE_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}' \
+            | grep -q '"success":true' && echo "cache purged" || { echo "purge failed"; exit 1; }
 
       - name: Close SSH (always)
         if: always()
