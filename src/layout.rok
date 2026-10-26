@@ -92,7 +92,7 @@ fn footer(links: str) -> str {
 /// `page` with a `<meta name="description">` of its own.
 pub fn page(site: Site, out: str, title: str, body: str) -> str { page_desc(site, out, title, "", body) }
 
-pub fn page_desc(site: Site, out: str, title: str, about: str, body: str) -> str {
+pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: str = "") -> str {
     // The 404 page is served for any missing path, so its links start at `/`.
     let root = if out == "404.html" { "/" } else { root_of(out) };
     let home = out == "index.html";
@@ -104,10 +104,11 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str) -> str
     let url = if home { site.base_url + "/" } else { site.base_url + "/" + out };
     // Heading permalinks are aria-hidden, so keep them out of the tab order too.
     let body = body.replace("class=\"anchor\" href=", "class=\"anchor\" tabindex=\"-1\" href=");
+    let ogimg = if img.is_empty() { site.base_url + "/og.png" } else { img };
     f"<!doctype html>
 <html lang=\"en\">
 <head>
-{head(site, root, full, desc, url, site.base_url + "/og.png", "")}</head>
+{head(site, root, full, desc, url, ogimg, "")}</head>
 <body class=\"{kind}\" data-root=\"{root}\">
 <a class=\"skip\" href=\"#content\">Skip to content</a>
 <header class=\"top\">

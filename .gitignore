@@ -11,3 +11,5 @@ deploy/terraform/.terraform/
 deploy/terraform/*.tfstate
 deploy/terraform/*.tfstate.*
 deploy/terraform/.terraform.tfstate.lock.info
+og/node_modules/
+og/manifest.tsv

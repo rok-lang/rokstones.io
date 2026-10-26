@@ -55,6 +55,11 @@ jobs:
       - name: Build the static site
         working-directory: rokstones.io
         run: rok run
+      - name: Render OG cards
+        working-directory: rokstones.io
+        run: |
+          npm --prefix og ci
+          node og/render.mjs public og/manifest.tsv || echo "warning: og render failed"
       - name: Build the server (full)
         if: ${{ inputs.full }}
         working-directory: rokstones.io
