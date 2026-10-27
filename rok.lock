@@ -6,7 +6,7 @@ Lock {
             name: "markdown",
             vers: "0.1.0",
             source: Dep::registry("https://github.com/rok-lang/rokstones.io-index"),
-            commit: "aa02a8f4980fbed74f33a2fd7eeedb9e1780e472",
+            commit: "c1fd5ffaa05d2310de128f8386b93175faa9cf4f",
             tree: "8e38896f638b6a6f5075e474eed0ca03018f878d",
         },
         Locked {
