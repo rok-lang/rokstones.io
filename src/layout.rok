@@ -121,7 +121,7 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
 <main id=\"content\">
 {body}
 </main>
-{footer(f"<li><a href=\"{esc(site.home)}\">rok-lang.org</a></li><li><a href=\"{esc(site.docs)}\">rok docs</a></li><li><a href=\"{esc(site.index_repo)}\">Registry index</a></li>")}<script src=\"{root}search.js\" defer></script>
+{footer(f"<li><a href=\"{esc(site.home)}\">rok-lang.org</a></li><li><a href=\"{esc(site.docs)}\">Rok docs</a></li><li><a href=\"{esc(site.index_repo)}\">Registry index</a></li>")}<script src=\"{root}search.js\" defer></script>
 </body>
 </html>
 "
