@@ -23,26 +23,24 @@ function chrome() {
 }
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const RAW = new Set(["EYEBROW", "BADGE"]); // trusted literals that carry markup
-const tpl = readFileSync(join(here, "stone.html"), "utf8");
-const fill = (d) => tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => (RAW.has(k) ? (d[k] ?? "") : esc(d[k] ?? "")));
+const read = (f) => readFileSync(join(here, f), "utf8");
+const fill = (tpl, d) => tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => esc(d[k] ?? ""));
 
-const cards = [];
-// Home card.
-cards.push({ out: join(outDir, "og.png"), data: {
-  EYEBROW: "the Rok package registry", NAME: "rok stones",
-  DESC: "Find a stone, then add it with rok add <name>.", CMD: "json", VERS: "0.1.0", BADGE: "registry",
-} });
-// Per-stone cards.
+// Glyph from the name, as in src/layout.rok.
+const glyph = (name) => {
+  let h = 7;
+  for (const c of name) h = (h * 31 + c.codePointAt(0)) % 9973;
+  return { HUE: h % 360, ROT: (h % 70) - 35, SX: ((80 + (h % 25)) / 100).toFixed(2) };
+};
+
+const cards = [{ out: join(outDir, "og.png"), html: read("home.html") }];
 if (existsSync(manifestPath)) {
+  const tpl = read("stone.html");
   for (const line of readFileSync(manifestPath, "utf8").split("\n")) {
     if (!line.trim()) continue;
     const [name, vers, ...rest] = line.split("\t");
     const desc = rest.join("\t") || `${name} ${vers}, a Rok stone`;
-    cards.push({ out: join(outDir, "og", `${name}.png`), data: {
-      EYEBROW: 'a Rok stone &middot; <span class="reg">rokstones.io</span>',
-      NAME: name, DESC: desc, CMD: name, VERS: vers, BADGE: "stone",
-    } });
+    cards.push({ out: join(outDir, "og", `${name}.png`), html: fill(tpl, { NAME: name, VERS: vers, DESC: desc, ...glyph(name) }) });
   }
 }
 
@@ -54,7 +52,7 @@ const browser = await puppeteer.launch({
 const tmp = join(here, "_render.html");
 try {
   for (const c of cards) {
-    writeFileSync(tmp, fill(c.data));
+    writeFileSync(tmp, c.html);
     const page = await browser.newPage();
     await page.setViewport({ width: 1200, height: 630, deviceScaleFactor: 2 });
     await page.goto(pathToFileURL(tmp).href, { waitUntil: "networkidle0" });

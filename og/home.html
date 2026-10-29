@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" class="rk dk">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../static/rok.css">
+<style>
+@font-face{font-family:"Geist";src:url("fonts/geist.woff2") format("woff2");font-weight:100 900;font-display:block}
+@font-face{font-family:"Geist Mono";src:url("fonts/geist-mono.woff2") format("woff2");font-weight:500;font-display:block}
+html,body{margin:0;width:1200px;height:630px;overflow:hidden}
+.og{position:relative;width:1200px;height:630px;box-sizing:border-box;display:flex;flex-direction:column;padding:64px 72px;background:var(--bg)}
+.grid{position:absolute;inset:0;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:60px 60px;opacity:.6}
+.top{position:relative;display:flex;align-items:center;gap:22px;font-size:64px;line-height:64px;font-weight:600;letter-spacing:-0.03em}
+h1{position:relative;margin:56px 0 0;font-size:76px;line-height:80px;letter-spacing:-0.04em;font-weight:600}
+.ft{position:relative;margin-top:auto;display:flex;align-items:center;gap:16px;font-family:var(--mono);font-size:22px;line-height:28px;color:var(--ink-3)}
+</style>
+</head>
+<body>
+<div class="og">
+  <div class="grid"></div>
+  <span class="top"><img src="logo.svg" alt="" width="96" height="96">rokstones</span>
+  <h1>Packages for Rok. Find a stone, <span style="color:var(--acc)">add it in one line.</span></h1>
+  <div class="ft"><span style="color:var(--acc)">$</span><span style="color:var(--ink)">rok add json</span><span style="margin-left:auto">rokstones.io</span></div>
+</div>
+</body>
+</html>
