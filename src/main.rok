@@ -35,11 +35,11 @@ pub struct Site {
     pub docs: str = "https://docs.rok-lang.org";
     /// The language's home site.
     pub home: str = "https://rok-lang.org";
+    pub playground: str = "https://playground.rok-lang.org";
     /// README cache (git objects and extracted READMEs).
     pub cache: str = ".cache";
     pub out: str = "public";
 }
-
 
 /// `a/./b/../c` -> `a/c`; leading `..` kept.
 fn norm(p: str) -> str {
@@ -89,7 +89,6 @@ fn write(root: str, path: str, data: str) throws {
     try fs::create_dir_all(dir_of(full));
     try fs::write(full, data);
 }
-
 
 /// Every value of `name="..."` in `html`.
 fn attr_values(cs: List<char>, name: str) -> List<str> {
@@ -212,7 +211,6 @@ fn check(files: Dict<str, str>, statics: Set<str>) -> List<str> {
     bad
 }
 
-
 fn main() throws {
     let t0 = Instant::now();
     let args = env::args();
@@ -264,15 +262,22 @@ fn main() throws {
     try fs::write("og/manifest.tsv", mani);
 
     let files: Dict<str, str> = Dict::new();
-    let guide = markdown::render(try fs::read_to_str("pages/index.md"), layout::md(|h| h));
-    files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all, guide.html)));
+    let guide = markdown::render(try fs::read_to_str("pages/publishing.md"), layout::md(|h| h));
+    files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all)));
+    files.insert("publishing.html", layout::page_desc(site, "publishing.html", "Using and publishing stones", "How to add a stone to a Rok package, and how a version gets into the index.", layout::guide(guide)));
     files.insert("404.html", layout::page(site, "404.html", "Not found", layout::not_found()));
     files.insert("stones/index.html", layout::page(site, "stones/index.html", "All stones", layout::all_stones(all)));
     for s in all {
         let out = layout::stone_out(s.name);
-        let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a rok stone" } else { s.desc };
+        let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a Rok stone" } else { s.desc };
         let og = site.base_url + "/og/" + s.name + ".png";
-        files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s, have), og));
+        files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s), og));
+        let vo = layout::tab_out(s.name, "versions");
+        files.insert(vo, layout::page_desc(site, vo, f"Versions of {s.name}", about, layout::versions_page(site, s), og));
+        let dpo = layout::tab_out(s.name, "dependencies");
+        files.insert(dpo, layout::page_desc(site, dpo, f"Dependencies of {s.name}", about, layout::deps_page(site, s, have), og));
+        let rdo = layout::tab_out(s.name, "dependents");
+        files.insert(rdo, layout::page_desc(site, rdo, f"Dependents of {s.name}", about, layout::dependents_page(site, s), og));
     }
 
     // Search index: every stone, its latest version and description.
@@ -303,6 +308,9 @@ fn main() throws {
     try write(out_root, "search-index.json", sx.to_str());
     let statics: Set<str> = Set::new();
     statics.insert("search-index.json");
+    // Served by `serve`, not files.
+    statics.insert("login");
+    statics.insert("me");
     for entry in fs::walk("static") {
         let e = try entry.get();
         if !e.is_file() { continue; }

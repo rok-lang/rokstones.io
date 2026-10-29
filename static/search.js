@@ -1,124 +1,129 @@
-// Client-side stone search over search-index.json:
-// [{t: name, u: url, v: latest version, p: description}].
+// Theme, header menu, stone search, copy buttons, install tabs.
+// search-index.json: [{t: name, u: url, v: latest version, p: description}].
 (() => {
   const root = document.body.dataset.root || "";
+  const html = document.documentElement;
   let index = null;
-
   const load = () =>
     index ? Promise.resolve(index)
       : fetch(root + "search-index.json").then((r) => r.json()).then((d) => (index = d));
 
-  // A copy button on each code block; article blocks get a macOS-style
-  // title bar (traffic lights + language), the sidebar snippets stay plain.
-  for (const pre of document.querySelectorAll(".meta pre, article pre:not(.err)")) {
-    const wrap = document.createElement("div");
-    wrap.className = "code";
-    const tools = document.createElement("div");
-    tools.className = "code-tools";
-    const lang = (pre.querySelector("code")?.className.match(/language-(\w+)/) || [])[1];
-    if (lang && lang !== "text" && !pre.closest(".meta")) wrap.dataset.lang = lang;
-    pre.replaceWith(wrap);
-    wrap.append(pre);
+  // Theme: localStorage.theme is "light" or "dark"; unset follows the system.
+  const dark = matchMedia("(prefers-color-scheme: dark)");
+  const stored = () => { try { return localStorage.getItem("theme"); } catch { return null; } };
+  const tb = document.querySelector(".theme");
+  const seg = document.querySelectorAll(".seg button");
+  const apply = () => {
+    const s = stored();
+    const d = s === "dark" || (s !== "light" && dark.matches);
+    html.classList.toggle("dk", d);
+    html.classList.toggle("lt", !d);
+    if (tb) {
+      tb.setAttribute("aria-pressed", d ? "true" : "false");
+      tb.title = d ? "Dark theme on" : "Dark theme off";
+    }
+    const cur = s === "light" || s === "dark" ? s : "system";
+    seg.forEach((b) => b.setAttribute("aria-pressed", b.dataset.theme === cur ? "true" : "false"));
+  };
+  const choose = (t) => {
+    try { t === "system" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); } catch {}
+    apply();
+  };
+  if (tb) tb.addEventListener("click", () => choose(html.classList.contains("dk") ? "light" : "dark"));
+  seg.forEach((b) => b.addEventListener("click", () => choose(b.dataset.theme)));
+  dark.addEventListener("change", apply);
+  apply();
+
+  // Narrow header: the menu button shows the nav below.
+  const hdr = document.querySelector(".hdr");
+  const menu = document.querySelector(".hdr .menu");
+  if (hdr && menu) {
+    const set = (open) => {
+      hdr.classList.toggle("open", open);
+      menu.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    menu.addEventListener("click", () => set(!hdr.classList.contains("open")));
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && hdr.classList.contains("open")) { set(false); menu.focus(); }
+    });
+  }
+
+  const copyButton = (text, cls) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "copy";
-    b.textContent = "copy";
-    b.setAttribute("aria-label", "Copy code");
+    b.className = cls;
+    b.textContent = "Copy";
     b.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(pre.innerText.replace(/\n$/, ""));
-        b.textContent = "copied ✓";
+        await navigator.clipboard.writeText(text().replace(/\n$/, ""));
+        b.textContent = "Copied";
       } catch {
-        b.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "press ⌘C" : "press Ctrl+C";
+        b.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "Press ⌘C" : "Press Ctrl+C";
       }
-      b.classList.add("done");
-      setTimeout(() => { b.textContent = "copy"; b.classList.remove("done"); }, 1600);
+      setTimeout(() => { b.textContent = "Copy"; }, 1600);
     });
-    tools.append(b);
-    if (wrap.dataset.lang) {
-      const head = document.createElement("div");
-      head.className = "code-head";
-      const lights = document.createElement("span");
-      lights.className = "lights";
-      lights.setAttribute("aria-hidden", "true");
-      for (let i = 0; i < 3; i++) lights.append(document.createElement("i"));
-      const title = document.createElement("span");
-      title.className = "code-title";
-      title.textContent = wrap.dataset.lang;
-      head.append(lights, title, tools);
-      wrap.prepend(head);
-    } else {
-      wrap.append(tools);
+    return b;
+  };
+
+  // Code blocks in readmes and the guide: a bar with the language and Copy.
+  for (const pre of document.querySelectorAll(".md pre")) {
+    const lang = (pre.querySelector("code")?.className.match(/language-(\w+)/) || [])[1] || "";
+    const fig = document.createElement("figure");
+    fig.className = "cb";
+    const bar = document.createElement("div");
+    bar.className = "cb-h";
+    const label = document.createElement("span");
+    label.className = "t-label";
+    label.textContent = lang && lang !== "text" ? lang : "";
+    bar.append(label, copyButton(() => pre.innerText, "copy"));
+    pre.replaceWith(fig);
+    fig.append(bar, pre);
+  }
+
+  // Install box: tabs plus a copy button per panel.
+  const tabs = [...document.querySelectorAll(".itabs [role=tab]")];
+  for (const p of document.querySelectorAll(".ipanel")) {
+    const pre = p.querySelector("pre");
+    p.append(copyButton(() => pre.innerText.replace(/^\$ /, ""), "copy"));
+  }
+  const pick = (t, focus) => {
+    for (const x of tabs) {
+      const on = x === t;
+      x.setAttribute("aria-selected", on ? "true" : "false");
+      x.tabIndex = on ? 0 : -1;
+      document.getElementById(x.getAttribute("aria-controls")).classList.toggle("on", on);
     }
-  }
+    if (focus) t.focus();
+  };
+  tabs.forEach((t, k) => {
+    t.addEventListener("click", () => pick(t, false));
+    t.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (d) { e.preventDefault(); pick(tabs[(k + d + tabs.length) % tabs.length], true); }
+    });
+  });
 
-  // Theme button: auto (the system setting) -> light -> dark. The choice
-  // is this reader's alone, so it lives in localStorage; the inline
-  // script in <head> applies it before the page paints.
-  const tb = document.querySelector(".theme");
-  if (tb) {
-    const order = ["auto", "light", "dark"];
-    const glyph = { auto: "◐", light: "☀", dark: "☾" };
-    const get = () => { try { return localStorage.getItem("theme") || "auto"; } catch { return "auto"; } };
-    const show = (t) => {
-      tb.textContent = glyph[t];
-      tb.setAttribute("aria-label", `Theme: ${t}`);
-      tb.title = `Theme: ${t}`;
-    };
-    show(get());
-    tb.addEventListener("click", () => {
-      const t = order[(order.indexOf(get()) + 1) % order.length];
-      try { t === "auto" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); } catch {}
-      if (t === "auto") delete document.documentElement.dataset.theme;
-      else document.documentElement.dataset.theme = t;
-      show(t);
-    });
-  }
-
-  // Compact header: the hamburger opens the nav as a drop panel. It
-  // closes on a link, an outside click, Escape, or a return to the full nav.
-  const top = document.querySelector(".top");
-  const navToggle = document.querySelector(".nav-toggle");
-  const nav = document.getElementById("nav");
-  if (top && navToggle && nav) {
-    const setNav = (open) => {
-      top.classList.toggle("nav-open", open);
-      navToggle.setAttribute("aria-expanded", open ? "true" : "false");
-    };
-    navToggle.addEventListener("click", (e) => {
-      e.stopPropagation();
-      setNav(!top.classList.contains("nav-open"));
-    });
-    nav.addEventListener("click", (e) => { if (e.target.closest("a")) setNav(false); });
-    document.addEventListener("click", (e) => {
-      if (top.classList.contains("nav-open") && !e.target.closest(".nav-toggle, #nav")) setNav(false);
-    });
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && top.classList.contains("nav-open")) { setNav(false); navToggle.focus(); }
-    });
-    // Collapse exactly when the full nav would not fit on one row: measure
-    // the natural width with the row forced not to wrap or shrink. Works
-    // for any number of links, so there is no per-page width breakpoint.
-    const fitNav = () => {
-      top.classList.remove("nav-compact");
-      top.classList.add("nav-measuring");
-      const overflow = top.scrollWidth > top.clientWidth + 1;
-      top.classList.remove("nav-measuring");
-      if (overflow) top.classList.add("nav-compact");
-      else setNav(false);
-    };
-    fitNav();
-    addEventListener("resize", fitNav);
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitNav);
-  }
-
-  // 404.html: name the missing path in the error.
+  // 404.html: name the missing path.
   const lost = document.getElementById("lost-path");
   if (lost) lost.textContent = location.pathname;
 
-  // `text` as nodes, each search term in it wrapped in <mark>.
+  const match = (data, query) => {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const q = terms.join(" ");
+    const hits = [];
+    for (const e of data) {
+      const t = e.t.toLowerCase();
+      const hay = t + " " + e.p.toLowerCase();
+      if (!terms.every((w) => hay.includes(w))) continue;
+      hits.push([t === q ? 0 : t.startsWith(q) ? 1 : t.includes(q) ? 2 : 3, e]);
+    }
+    hits.sort((a, b) => a[0] - b[0] || a[1].t.localeCompare(b[1].t));
+    return [hits.map((h) => h[1]), terms];
+  };
+
+  // `text` as nodes, each term wrapped in <mark>.
   const marked = (text, terms) => {
-    const words = terms.filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const words = terms.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     if (!words.length) return [document.createTextNode(text)];
     const re = new RegExp(`(${words.join("|")})`, "gi");
     return text.split(re).map((part, k) => {
@@ -129,19 +134,18 @@
     });
   };
 
-  const emptyText = (data) => (data.length ? "No results" : "No stones published yet");
-
-  const boxes = [...document.querySelectorAll(".search")];
-
-  for (const wrap of boxes) {
-    const q = wrap.querySelector(".q");
-    const box = wrap.querySelector(".results");
-    const status = wrap.querySelector("[role=status]");
+  // Header search: a combobox over the index; Enter without a pick opens
+  // the full list filtered (stones/?q=).
+  const form = document.querySelector(".hdr .search");
+  if (form) {
+    const q = form.querySelector(".q");
+    const box = form.querySelector(".results");
+    const status = form.querySelector("[role=status]");
+    const MAX = 8;
     let sel = -1;
-    const links = () => [...box.querySelectorAll("a")];
-
+    const opts = () => [...box.querySelectorAll("[role=option]")];
     const mark = (i) => {
-      const as = links();
+      const as = opts();
       as.forEach((a, k) => a.setAttribute("aria-selected", k === i ? "true" : "false"));
       sel = i;
       if (as[i]) {
@@ -151,39 +155,32 @@
         q.removeAttribute("aria-activedescendant");
       }
     };
-
     const show = (on) => {
       box.hidden = !on;
       q.setAttribute("aria-expanded", on ? "true" : "false");
-      if (!on) q.removeAttribute("aria-activedescendant");
+      if (!on) { q.removeAttribute("aria-activedescendant"); sel = -1; }
     };
-
     const search = async () => {
-      const query = q.value.trim().toLowerCase();
-      const terms = query.split(/\s+/).filter(Boolean);
-      if (!terms.length) { show(false); status.textContent = ""; return; }
+      const query = q.value.trim();
+      if (!query) { show(false); status.textContent = ""; return; }
       const data = await load();
-      const hits = [];
-      for (const e of data) {
-        const t = e.t.toLowerCase();
-        const hay = t + " " + e.p.toLowerCase();
-        if (!terms.every((w) => hay.includes(w))) continue;
-        hits.push([t === query ? 0 : t.startsWith(query) ? 1 : t.includes(query) ? 2 : 3, e]);
-      }
-      hits.sort((a, b) => a[0] - b[0] || a[1].t.localeCompare(b[1].t));
+      const [hits, terms] = match(data, query);
       box.replaceChildren();
-      hits.slice(0, 40).forEach(([, e], k) => {
+      hits.slice(0, MAX).forEach((e, k) => {
         const li = document.createElement("li");
         li.setAttribute("role", "none");
         const a = document.createElement("a");
-        a.id = box.id + "-" + k;
+        a.id = "results-" + k;
         a.setAttribute("role", "option");
         a.tabIndex = -1;
-        a.href = root + e.u;
-        a.append(...marked(e.t, terms), " ");
-        const v = document.createElement("code");
+        a.href = root + e.u.replace(/\.html$/, "");
+        const n = document.createElement("span");
+        n.className = "n";
+        n.append(...marked(e.t, terms));
+        const v = document.createElement("span");
+        v.className = "v";
         v.textContent = e.v;
-        a.append(v);
+        a.append(n, v);
         if (e.p) {
           const s = document.createElement("small");
           s.textContent = e.p;
@@ -192,35 +189,66 @@
         li.append(a);
         box.append(li);
       });
+      const li = document.createElement("li");
+      li.setAttribute("role", "none");
       if (!hits.length) {
-        const li = document.createElement("li");
-        li.setAttribute("role", "none");
         li.className = "empty";
-        li.textContent = emptyText(data);
+        li.textContent = data.length ? "No stone matches." : "No stones published yet.";
+        box.append(li);
+      } else if (hits.length > MAX) {
+        li.className = "all";
+        li.textContent = `${hits.length} stones match. Press Enter to see all.`;
         box.append(li);
       }
       show(true);
-      status.textContent = !hits.length ? emptyText(data) : hits.length > 40 ? `40 of ${hits.length} results shown` : hits.length === 1 ? "1 result" : `${hits.length} results`;
-      mark(hits.length ? 0 : -1);
+      status.textContent = !hits.length ? "No stone matches" : hits.length === 1 ? "1 stone" : `${hits.length} stones`;
+      mark(-1);
     };
-
     q.addEventListener("focus", load, { once: true });
     q.addEventListener("input", search);
     q.addEventListener("keydown", (ev) => {
-      const n = links().length;
+      const n = opts().length;
       if (ev.key === "ArrowDown" && n) { ev.preventDefault(); mark((sel + 1) % n); }
       else if (ev.key === "ArrowUp" && n) { ev.preventDefault(); mark((sel - 1 + n) % n); }
-      else if (ev.key === "Enter" && links()[sel]) { location.href = links()[sel].href; }
-      else if (ev.key === "Escape") { show(false); q.blur(); }
+      else if (ev.key === "Enter" && opts()[sel]) { ev.preventDefault(); location.href = opts()[sel].href; }
+      else if (ev.key === "Escape") { if (!box.hidden) show(false); else q.blur(); }
     });
-    document.addEventListener("click", (ev) => {
-      if (!wrap.contains(ev.target)) show(false);
+    document.addEventListener("click", (ev) => { if (!form.contains(ev.target)) show(false); });
+    document.addEventListener("keydown", (ev) => {
+      const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
+      if (ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); q.focus(); }
     });
-  }
 
-  document.addEventListener("keydown", (ev) => {
-    const q = boxes.length && boxes[0].querySelector(".q");
-    const typing = ev.target.closest && ev.target.closest("input, textarea");
-    if (ev.key === "/" && q && !typing) { ev.preventDefault(); q.focus(); }
-  });
+    // The full list, filtered by ?q=.
+    const list = document.querySelector(".list-page .rows");
+    const query = new URLSearchParams(location.search).get("q");
+    if (list && query && query.trim()) {
+      q.value = query;
+      load().then((data) => {
+        const [hits, terms] = match(data, query);
+        const want = new Map(hits.map((e, k) => [e.t, k]));
+        const rows = [...list.children];
+        for (const li of rows) {
+          const name = li.querySelector(".nm").textContent;
+          li.hidden = !want.has(name);
+          li.style.order = want.get(name) ?? 0;
+          const nm = li.querySelector(".nm");
+          nm.replaceChildren(...marked(name, terms));
+        }
+        list.style.display = "flex";
+        list.style.flexDirection = "column";
+        list.hidden = !hits.length;
+        document.getElementById("no-match").hidden = hits.length > 0;
+        const title = document.getElementById("list-title");
+        title.textContent = "Search results";
+        const note = document.getElementById("list-note");
+        note.textContent = `${hits.length === 1 ? "1 stone matches" : hits.length + " stones match"} “${query.trim()}”, best match first. `;
+        const all = document.createElement("a");
+        all.href = location.pathname;
+        all.textContent = "Show all stones";
+        note.append(all);
+        document.title = `Search results for ${query.trim()} - rokstones.io`;
+      });
+    }
+  }
 })();
