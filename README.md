@@ -32,7 +32,7 @@ tests/e2e.sh              # end-to-end test of serve
 
 ## Preview
 
-Serve over HTTP (the search index is loaded with `fetch`):
+Serve over HTTP (the search index is loaded with `fetch`). Links are extensionless (`/stones/json` is `stones/json.html`), which `rok run -- serve` resolves; a plain file server only opens the pages themselves:
 
 ```bash
 python3 -m http.server -d public 8000
@@ -87,9 +87,10 @@ Edit `site.rokon` (ROKON). Key fields: `title`, `tagline`, `description`, `index
 | `src/index.rok`  | API entry checks, index commits and pushes |
 | `src/secret.rok` | SHA-256, random bytes, constant-time compare |
 | `src/stones.rok` | Reads the index, semver ordering, dependents, README fetching |
-| `src/layout.rok` | Page frame, home page, stone list, stone page |
+| `src/layout.rok` | Page frame, home, stone list, publishing guide, stone pages and their tabs |
 | `tests/`         | `e2e.sh` and the fake GitHub it runs |
-| `pages/index.md` | Home page text |
-| `static/`        | `style.css`, `search.js`, logo |
+| `pages/publishing.md` | Publishing guide text |
+| `static/`        | `rok.css` (copied from [rok-lang/web](https://github.com/rok-lang/web); do not edit here), `style.css`, `theme.js`, `search.js`, marks |
+| `og/`            | Open Graph cards: `node og/render.mjs` after a build |
 
 Markdown and highlighting come from the [`markdown`](https://github.com/rok-lang/markdown) and [`rok-syntax`](https://github.com/rok-lang/rok-syntax) stones (path dependencies until switched to their rokstones.io versions).
