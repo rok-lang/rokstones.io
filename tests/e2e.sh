@@ -37,6 +37,7 @@ git -C "$T/index" push -q -u origin HEAD 2>/dev/null
 # A site directory: the generator's inputs, output in $T/site/public.
 mkdir -p "$T/site"
 cp -R "$repo/static" "$repo/pages" "$T/site/"
+mkdir -p "$T/site/og"
 sed -e 's|^ *out: .*|    out: "public",|' "$repo/site.rokon" > "$T/site/site.rokon"
 
 "$repo/tests/fake-github/target/debug/fake_github" "127.0.0.1:$gh_port" test-secret &
@@ -233,7 +234,7 @@ ok "push failure"
 
 # The site follows the index.
 for _ in $(seq 100); do [ -f "$T/site/public/stones/geom.html" ] && break; sleep 0.2; done
-req GET /stones/geom.html
+req GET /stones/geom
 expect_code 200 "stone page after publish"
 ok "site rebuilt"
 
