@@ -34,7 +34,6 @@ const MAX_CONNS: i32 = 256;
 const SESSION_SECS: i64 = 2592000;
 const MAX_TOKENS: usize = 20;
 
-
 /// Settings from the environment, then `.env`.
 pub struct Cfg {
     /// Public base URL, no trailing `/`.
@@ -102,7 +101,6 @@ pub fn load_cfg(path: str) throws -> Cfg {
 pub fn is_admin(cfg: Cfg, login: str) -> bool {
     !login.is_empty() && cfg.admins.contains("," + login.to_lowercase() + ",")
 }
-
 
 #[derive(Rokon)]
 pub struct Account {
@@ -213,7 +211,6 @@ fn owners_of(db: Db, k: str) -> List<i64> | none {
     none
 }
 
-
 pub struct Resp {
     pub status: i32;
     pub headers: List<str>;
@@ -230,7 +227,7 @@ fn html(status: i32, body: str) -> Resp {
             "Cache-Control: no-store",
             "X-Frame-Options: DENY",
             "Referrer-Policy: same-origin",
-            "Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; form-action 'self'",
+            "Content-Security-Policy: default-src 'self'; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net; frame-ancestors 'none'; form-action 'self'",
         ],
         body: body,
         file: "",
@@ -277,13 +274,12 @@ pub fn date(t: i64) -> str {
 }
 
 fn page(site: Site, path: str, title: str, body: str, status: i32) -> Resp {
-    html(status, layout::page(site, path[1:], title, f"<article class=\"doc account\">\n{body}\n</article>"))
+    html(status, layout::page(site, path[1:], title, f"<div class=\"frame acct\">\n{body}\n</div>"))
 }
 
 fn message(site: Site, path: str, status: i32, title: str, text: str) -> Resp {
-    page(site, path, title, f"<h1>{esc(title)}</h1>\n<p>{esc(text)}</p>\n<p><a href=\"/\">Home</a></p>", status)
+    page(site, path, title, f"<h1 class=\"t-h1\">{esc(title)}</h1>\n<p class=\"t-lead\">{esc(text)}</p>\n<p><a href=\"/\">Back to rokstones</a></p>", status)
 }
-
 
 /// A curl config value, quoted.
 fn cq(s: str) -> str {
@@ -421,7 +417,6 @@ fn github_user(cfg: Cfg, code: str) throws (ApiError) -> (i64, str) {
     (id, login)
 }
 
-
 fn login(cfg: Cfg) throws -> Resp {
     let state = try secret::random_hex(16);
     let to = f"{cfg.oauth}/login/oauth/authorize?client_id={http::pct_encode(cfg.client_id)}&redirect_uri={http::pct_encode(cfg.url + "/auth/github/callback")}&state={state}&scope=read:user";
@@ -467,15 +462,15 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
     let a = account(db, s.account) ?? Account { id: 0i64, login: "", created: 0i64 };
     let csrf = esc(s.csrf);
     let b = StrBuf::new();
-    b.push_str(f"<h1>Account</h1>\n<p>Logged in with GitHub as <strong>{esc(a.login)}</strong>.</p>\n");
-    b.push_str(f"<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button type=\"submit\">Log out</button></form>\n");
-    b.push_str("<h2>Publish tokens</h2>\n");
+    b.push_str(f"<h1 class=\"t-h1\">Account</h1>\n<p class=\"t-lead\">Logged in with GitHub as <strong>{esc(a.login)}</strong>.</p>\n");
+    b.push_str(f"<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button class=\"btn-2 btn-sm\" type=\"submit\">Log out</button></form>\n");
+    b.push_str("<h2 class=\"t-h3\">Publish tokens</h2>\n");
     if !is_admin(cfg, a.login) {
         b.push_str("<p>Publishing is not open yet.</p>\n");
         return page(site, path, "Account", b.to_str(), 200);
     }
     if !fresh.is_empty() {
-        b.push_str(f"<div class=\"callout important\"><p class=\"callout-title\">New token (shown once; copy it now)</p><pre><code>{esc(fresh)}</code></pre><p>Save it with <code>rok login</code>, which reads it from stdin.</p></div>\n");
+        b.push_str(f"<div class=\"callout help\"><span class=\"lab\">New token, shown once: copy it now</span><pre class=\"cmd\"><code>{esc(fresh)}</code></pre><p>Save it with <code class=\"ic\">rok login</code>, which reads it from stdin.</p></div>\n");
     }
     let mine: List<Token> = List::new();
     for t in db.tokens {
@@ -484,13 +479,13 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
     if mine.is_empty() {
         b.push_str("<p>No tokens yet.</p>\n");
     } else {
-        b.push_str("<table>\n<thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>\n<tbody>\n");
+        b.push_str("<div class=\"table-wrap\"><table class=\"tbl\">\n<thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>\n<tbody>\n");
         for t in mine {
-            b.push_str(f"<tr><td>{esc(t.name)}</td><td>{date(t.created)}</td><td>{date(t.last_used)}</td><td><form method=\"post\" action=\"/me/tokens/{esc(t.id)}/revoke\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button type=\"submit\">Revoke</button></form></td></tr>\n");
+            b.push_str(f"<tr><td>{esc(t.name)}</td><td>{date(t.created)}</td><td>{date(t.last_used)}</td><td><form method=\"post\" action=\"/me/tokens/{esc(t.id)}/revoke\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button class=\"btn-2 btn-sm\" type=\"submit\">Revoke</button></form></td></tr>\n");
         }
-        b.push_str("</tbody>\n</table>\n");
+        b.push_str("</tbody>\n</table></div>\n");
     }
-    b.push_str(f"<form method=\"post\" action=\"/me/tokens\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><label>Name <input name=\"name\" maxlength=\"64\" required></label> <button type=\"submit\">Create token</button></form>\n");
+    b.push_str(f"<form method=\"post\" action=\"/me/tokens\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><label>Name <input name=\"name\" maxlength=\"64\" required></label> <button class=\"btn btn-sm\" type=\"submit\">Create token</button></form>\n");
     page(site, path, "Account", b.to_str(), 200)
 }
 
@@ -558,7 +553,6 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     redirect("/me", [])
 }
 
-
 #[derive(Rokon)]
 pub struct Yank {
     pub name: str;
@@ -622,7 +616,6 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     if changed { STALE.store(1); }
     rokon_resp(200, "Yanked", [("name", Value::Str(y.name)), ("vers", Value::Str(y.vers)), ("yanked", Value::Bool(!y.undo))])
 }
-
 
 fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let p = r.path;
