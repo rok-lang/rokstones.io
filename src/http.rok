@@ -196,7 +196,6 @@ pub fn send<B: AsBytes>(s: TcpStream, status: i32, headers: List<str>, body: B, 
     if !head_only { try s.write_all(bytes); }
 }
 
-
 fn hexval(b: u8) -> i32 {
     if b >= 48u8 && b <= 57u8 { return (b - 48u8) as i32; }
     if b >= 97u8 && b <= 102u8 { return (b - 87u8) as i32; }
@@ -267,7 +266,6 @@ pub fn cookie(r: Request, name: str) -> str {
     }
     ""
 }
-
 
 pub fn content_type(path: str) -> str {
     let ext = match path.rfind(".") {

@@ -31,7 +31,6 @@ pub fn err(status: i32, msg: str) -> ApiError { ApiError { status: status, msg: 
 
 fn bad(msg: str) -> ApiError { err(400, msg) }
 
-
 /// One package up to case and `-` / `_`.
 pub fn key(name: str) -> str { name.to_lowercase().replace("-", "_") }
 
@@ -135,7 +134,6 @@ fn is_hex(s: str, lens: List<usize>) -> bool {
     }
     true
 }
-
 
 /// What an API publish adds: the entry's name, version, index file and line.
 pub struct Entry {
@@ -409,7 +407,6 @@ pub fn parse_entry(body: str) throws (ApiError) -> Entry {
     }
     throw bad("the body is a `Stone { .. }` or `Native { .. }` index entry");
 }
-
 
 /// `git args..` in `dir`; its stdout. A failure is logged (git's stderr
 /// holds no secrets of ours) and thrown as `status`.

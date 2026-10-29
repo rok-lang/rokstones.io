@@ -73,7 +73,6 @@ pub struct Readmes {
     pub offline: bool;
 }
 
-
 /// A package name (spec 9.10.3): lowercase ASCII `[a-z0-9_-]+`, starting with a letter.
 pub fn is_name(s: str) -> bool {
     if s.is_empty() { return false; }
@@ -103,7 +102,6 @@ fn is_hex40(s: str) -> bool {
     }
     true
 }
-
 
 fn num(s: str) -> u64 { try s.parse::<u64>() catch _ { 0u64 } }
 
@@ -195,7 +193,6 @@ pub fn caret(v: str) -> str {
     f"^0.0.{xs[2]}"
 }
 
-
 fn get_str(f: OrderedDict<str, Value>, k: str) -> str | none {
     if let v: Value = f.get(k) {
         if let Value::Str(s) = v { return s; }
@@ -283,7 +280,6 @@ pub fn parse_line(line: str) throws (LineError) -> (str, Version) {
     }
     (name, Version { vers: vers, deps: deps, url: url, rev: rev, cksum: get_str(f, "cksum") ?? "", yanked: yanked, description: get_str(f, "description") ?? "", license: get_str(f, "license") ?? "", features: features })
 }
-
 
 /// `git args..`; its stdout, or none when it fails or cannot start.
 fn git(args: List<str>) -> str | none {
@@ -418,7 +414,6 @@ fn first_para(html: str, n: usize) -> str {
     }
     out.to_str().trim_end() + "..."
 }
-
 
 pub fn load(dir: str, r: Readmes) -> Index {
     let errors: List<str> = List::new();
