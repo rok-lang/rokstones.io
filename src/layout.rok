@@ -156,7 +156,7 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
     let account = if mine {
         f"<a class=\"btn-2 btn-sm login\" href=\"{root}me\" aria-current=\"page\">Account</a>"
     } else {
-        f"<a class=\"btn-2 btn-sm login\" href=\"{root}login\">Log in<span class=\"wide\">&nbsp;with GitHub</span></a>"
+        f"<a class=\"btn-2 btn-sm login\" href=\"{root}login\">Log in<span class=\"wide\"> with GitHub</span></a>"
     };
     f"<!doctype html>
 <html lang=\"en\" class=\"rk lt\">

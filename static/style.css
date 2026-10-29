@@ -25,7 +25,7 @@ button{font:inherit}
 .theme .sun,.dk .theme .moon{display:none}
 .dk .theme .sun{display:block}
 .ib:hover{color:var(--ink)}
-.login{white-space:nowrap;gap:0}
+.login{display:inline-block;white-space:nowrap}
 .hdr .menu{display:none}
 html:not(.js) .theme,html:not(.js) .seg{display:none}
 
