@@ -1,5 +1,20 @@
 /* rokstones.io on top of rok.css (the web kit, copied verbatim). */
 
+/* Local fonts sized to Geist's metrics, so text keeps its line breaks when
+ * the webfonts swap in (no layout shift). size-adjust is Geist's width over
+ * the local font's on readme text, as rendered (ss01, cv11, kerning);
+ * Liberation matches Arial.
+ * Latin only: other scripts fall through to Pretendard as before. */
+@font-face{font-family:"Geist Fallback";src:local("Arial"),local("ArialMT"),local("Liberation Sans");size-adjust:102.5%;ascent-override:98.05%;descent-override:28.78%;line-gap-override:0%;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+20AC,U+2122}
+@font-face{font-family:"Geist Fallback";font-weight:600 700;src:local("Arial Bold"),local("Arial-BoldMT"),local("Liberation Sans Bold");size-adjust:100.8%;ascent-override:99.7%;descent-override:29.27%;line-gap-override:0%;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+20AC,U+2122}
+@font-face{font-family:"Geist Fallback Roboto";src:local("Roboto"),local("Roboto Regular"),local("Roboto-Regular");size-adjust:103.4%;ascent-override:97.2%;descent-override:28.53%;line-gap-override:0%;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+20AC,U+2122}
+@font-face{font-family:"Geist Fallback Roboto";font-weight:600 700;src:local("Roboto Bold"),local("Roboto-Bold");size-adjust:106.3%;ascent-override:94.54%;descent-override:27.75%;line-gap-override:0%;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+20AC,U+2122}
+@font-face{font-family:"Geist Mono Fallback";src:local("Menlo"),local("Menlo-Regular"),local("DejaVu Sans Mono"),local("Liberation Mono"),local("Courier New");size-adjust:99.65%;ascent-override:100.85%;descent-override:29.6%;line-gap-override:0%;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+20AC,U+2122}
+@font-face{font-family:"Geist Mono Fallback Consolas";src:local("Consolas");size-adjust:109.13%;ascent-override:92.09%;descent-override:27.03%;line-gap-override:0%;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+20AC,U+2122}
+.rk{
+  --sans:"Geist","Geist Fallback","Geist Fallback Roboto","Pretendard Variable","Pretendard",system-ui,sans-serif;
+  --mono:"Geist Mono","Geist Mono Fallback","Geist Mono Fallback Consolas","Pretendard Variable","Pretendard",ui-monospace,monospace;
+}
 html.rk{background:var(--bg)}
 body{margin:0;min-height:100vh;display:flex;flex-direction:column}
 main{flex:1}
