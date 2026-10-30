@@ -40,6 +40,8 @@ pub struct Site {
     /// The language's home site.
     pub home: str = "https://rok-lang.org";
     pub playground: str = "https://playground.rok-lang.org";
+    /// The toolchain release the footer names (`rok 0.1.4`).
+    pub release: str = "";
     /// README cache (git objects and extracted READMEs).
     pub cache: str = ".cache";
     pub out: str = "public";

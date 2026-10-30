@@ -1,5 +1,6 @@
-// Header menu, stone search, copy buttons, install tabs. The theme is
-// theme.js and the search shortcut keys.js, from the web kit.
+// Header menu, stone search, code block bars, install tabs. The theme
+// is theme.js, the search shortcut keys.js and Copy copy.js, from the
+// web kit.
 // search-index.json: [{t: name, u: canonical path, v: latest version, p: description}].
 (() => {
   let index = null;
@@ -21,20 +22,14 @@
     });
   }
 
-  const copyButton = (text, cls) => {
+  // A Copy button for copy.js (the web kit), as chrome::copy_button writes it.
+  const copyButton = (text) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = cls;
+    b.className = "btn-2 btn-sm copy";
+    b.dataset.copy = text;
+    b.setAttribute("aria-label", "Copy");
     b.textContent = "Copy";
-    b.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(text().replace(/\n$/, ""));
-        b.textContent = "Copied";
-      } catch {
-        b.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "Press ⌘C" : "Press Ctrl+C";
-      }
-      setTimeout(() => { b.textContent = "Copy"; }, 1600);
-    });
     return b;
   };
 
@@ -48,16 +43,12 @@
     const label = document.createElement("span");
     label.className = "t-label";
     label.textContent = lang && lang !== "text" ? lang : "";
-    bar.append(label, copyButton(() => pre.innerText, "copy"));
+    bar.append(label, copyButton(pre.textContent.replace(/\n$/, "")));
     pre.replaceWith(fig);
     fig.append(bar, pre);
   }
 
-  // Install boxes: tabs plus a copy button per panel.
-  for (const p of document.querySelectorAll(".ipanel, .iuse")) {
-    const pre = p.querySelector("pre");
-    p.append(copyButton(() => pre.innerText.replace(/^\$ /, ""), "copy"));
-  }
+  // Install boxes: tabs (their Copy buttons are the page's own).
   for (const box of document.querySelectorAll(".inst")) {
     const tabs = [...box.querySelectorAll(".itabs [role=tab]")];
     const pick = (t, focus) => {

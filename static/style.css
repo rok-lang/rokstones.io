@@ -21,8 +21,6 @@ button{font:inherit}
 @media (hover:none){.search .kbd{display:none}}
 .hdr .nav{margin-left:auto;flex-wrap:nowrap}
 .hdr .nav a{white-space:nowrap}
-/* the current section, as on rok-lang.org and the docs */
-.nav a[aria-current]{color:var(--ink);background:var(--bg-2);font-weight:500}
 .ib:hover{color:var(--ink)}
 .login{display:inline-block;white-space:nowrap}
 .hdr .menu{display:none}
@@ -149,36 +147,24 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .tbl code{font-size:13px}
 .tbl tr:hover td{background:none}
 
-/* API tab: modules, items, members; the Symbols list */
+/* API tab: modules, items, members (rok.css), the Symbols list */
 .api{display:flex;flex-direction:column;gap:40px;min-width:0}
 .api-mod{display:flex;flex-direction:column;gap:12px;min-width:0}
 .api-mod>.md,.api-item>.md{max-width:760px}
 .api-path{font-size:20px;line-height:28px;letter-spacing:-0.01em;font-weight:500;padding-bottom:8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .api-path code{font-weight:500}
 .api-mod>.t-label{margin-top:12px;color:var(--ink-2)}
-.api-item{padding-top:14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px;min-width:0;scroll-margin-top:16px}
+.api-item{min-width:0;scroll-margin-top:16px}
 .api-mod>.t-label+.api-item{border-top:0;padding-top:0}
-.api-item h4{margin:0;font-family:var(--mono);font-size:16px;line-height:26px;font-weight:500;overflow-wrap:anywhere}
-.api-item h4 a{color:var(--ink)}
-pre.sig,.members pre,.uses code{font-size:14px;line-height:22px}
-pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}
-/* signatures break only between the pieces apidoc.rok marks, and
-   continue indented */
-:is(pre.sig,.members>li>pre) code{display:block;padding-left:4ch;text-indent:-4ch}
-.nw{white-space:nowrap}
-.members{list-style:none;margin:0;padding:0}
-.members>li{padding:10px 0;border-top:1px solid var(--line);scroll-margin-top:16px}
-.members>li:first-child{border-top:0;padding-top:0}
-.members>li>pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}
+.api-item h3{overflow-wrap:anywhere}
+pre.sig,.uses code{font-size:14px;line-height:22px}
+/* signatures sit in a code box here */
+pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);border-radius:6px;overflow-wrap:anywhere;overflow-x:auto}
+.members>li{scroll-margin-top:16px}
 .members .md{margin-top:6px;color:var(--ink-2)}
-.members>li:target,.api-item:target>h4{background:var(--acc-bg)}
-.impls{font-size:14px;line-height:20px;color:var(--ink-2)}
-.impls summary{cursor:pointer;padding:2px 0}
-.impls ul,.uses{list-style:none;margin:0;padding:0}
-.impls ul{margin-top:6px}
-.impls li{padding:3px 0}
-.uses{display:flex;flex-direction:column;gap:4px}
-.api .k{color:var(--k)}.api .t{color:var(--t)}.api .s{color:var(--s)}.api .n{color:var(--n)}.api .c{color:var(--c)}.api .a{color:var(--n)}
+.api-item:target>h3{background:var(--acc-bg)}
+.uses{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.api .a{color:var(--n)}
 .api-side{position:sticky;top:0;max-height:100vh;overflow-y:auto;box-sizing:border-box;align-self:start}
 .syms{display:flex;flex-direction:column;gap:2px;font-size:14px;line-height:20px;min-width:0}
 .syms ul{list-style:none;margin:0 0 10px;padding:0}
@@ -192,12 +178,6 @@ pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);bo
 .syms-m{display:none;border:1px solid var(--line);border-radius:6px;padding:0 12px}
 .syms-m summary{cursor:pointer;padding:10px 0;font-size:14px;line-height:20px;font-weight:500}
 .syms-m .syms{padding-bottom:8px}
-
-/* copy button, code block bar (search.js) */
-.copy{font-size:13px;line-height:18px;padding:3px 9px;border:1px solid var(--line-2);border-radius:6px;background:var(--panel);color:var(--ink-2);cursor:pointer}
-.copy:hover{color:var(--ink)}
-.cb-h .copy{border-color:transparent;background:transparent}
-.cb-h .copy:hover{border-color:var(--line-2)}
 
 /* markdown: readmes and the guide */
 .md{display:flex;flex-direction:column;gap:16px;max-width:760px;min-width:0}
@@ -236,7 +216,7 @@ pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);bo
 .md .callout:is(.warning,.caution,.important) .callout-title{color:var(--acc)}
 .md sup{line-height:0}
 .md .footnotes{font-size:14px;line-height:21px;color:var(--ink-2);border-top:1px solid var(--line);padding-top:16px}
-.md .k{color:var(--k)}.md .t{color:var(--t)}.md .s{color:var(--s)}.md .n{color:var(--n)}.md .c{color:var(--c)}.md .a{color:var(--n)}
+.md .a{color:var(--n)}
 
 /* guide */
 .doc{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:56px;padding-top:48px;padding-bottom:80px}
@@ -246,9 +226,8 @@ pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);bo
 .doc .toc .t-label{padding:0 0 8px 14px}
 .doc .toc a:hover{color:var(--ink);text-decoration:none}
 
-/* 404, server pages */
-.lost{padding-top:72px;padding-bottom:96px;display:flex;flex-direction:column;gap:16px;align-items:flex-start}
-.lost .term{border-radius:6px;max-width:100%;overflow-x:auto;box-sizing:border-box}
+/* 404 (chrome::not_found in rok.css), server pages */
+.lost-page{padding-top:32px;padding-bottom:48px}
 .acct{padding-top:48px;padding-bottom:80px;display:flex;flex-direction:column;align-items:flex-start;gap:16px}
 .acct>*{max-width:760px}
 .acct h2{margin-top:16px}

@@ -72,7 +72,7 @@ pub struct Stone {
     /// The latest version's tree; none when it could not be read.
     pub facts: Facts | none;
     /// Its public modules (apidoc.rok); empty when unavailable.
-    pub api: List<apidoc::Module>;
+    pub api: List<web::apidoc::Module>;
     /// Why `api` is empty: `"tree"` (not fetched), `"lib"` (no
     /// src/lib.rok); `""` when it is not.
     pub api_none: str;
@@ -609,7 +609,7 @@ pub fn load(dir: str, r: Readmes) -> Index {
         let html = "";
         let text = readme_text(r, k, l.url, l.rev);
         let facts: Facts | none = none;
-        let api: List<apidoc::Module> = List::new();
+        let api: List<web::apidoc::Module> = List::new();
         let api_none = "tree";
         if let t: Tree = tree_of_stone(r, k, l.url, l.rev) {
             let files = tree_files(t);

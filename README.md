@@ -32,7 +32,7 @@ tests/e2e.sh              # end-to-end test of serve
 
 ## Web kit
 
-`web/` is [rok-lang/web](https://github.com/rok-lang/web), pinned to a commit. The site builds its `web` library in (`Dep::path("web/rok")`): HTTP, the canonical-address rules, the shared header and footer markup, and the kit's files, which every build writes into `public/` at `/rok.css`, `/theme.js`, `/keys.js`, `/rok.svg`, and the rokstones `/logo.svg`, `/favicon.ico` and `/apple-touch-icon.png`. The server needs nothing from `web/` at run time; `og/render.mjs` reads `web/css/rok.css` and the mark through the templates. Move to a newer kit with:
+`web/` is [rok-lang/web](https://github.com/rok-lang/web), pinned to a commit. The site builds its `web` library in (`Dep::path("web/rok")`): HTTP, the canonical-address rules, the shared header and footer markup, and the kit's files, which every build writes into `public/` at `/rok.css`, `/theme.js`, `/keys.js`, `/copy.js`, `/rok.svg`, and the rokstones `/logo.svg`, `/favicon.ico` and `/apple-touch-icon.png`. The server needs nothing from `web/` at run time; `og/render.mjs` reads `web/css/rok.css` and the mark through the templates. Move to a newer kit with:
 
 ```bash
 git submodule update --remote web

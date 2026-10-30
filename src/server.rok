@@ -657,7 +657,8 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
             return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: " + cache_for(p, f, r.query)], body: "", file: f };
         }
     }
-    message(site, p, 404, "Not found", "No page here.")
+    // The 404 every Rok site shares, as public/404.html has it.
+    html(404, layout::page(site, p[1:], "Not found", layout::not_found()))
 }
 
 /// The bytes of `file`, found for `path`. A rebuild swaps `public/` for

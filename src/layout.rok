@@ -154,6 +154,7 @@ fn footer(site: Site) -> str {
             ("Project", f"<a href=\"{esc(site.home)}/roadmap\">Roadmap</a><a href=\"{gh}\">GitHub</a><a href=\"{gh}/rok/security/policy\">Security</a><a href=\"{gh}/rok/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a>"),
         ],
         sites: chrome::Sites { home: site.home, docs: site.docs + "/latest", stones: "/", playground: site.playground, current: "stones" },
+        release: site.release,
     })
 }
 
@@ -200,6 +201,7 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
 {body}
 </main>
 {footer(site)}<script src=\"/keys.js\" defer></script>
+<script src=\"/copy.js\" defer></script>
 <script src=\"/search.js\" defer></script>
 </body>
 </html>
@@ -269,7 +271,7 @@ pub fn landing(site: Site, all: List<Stone>) -> str {
 <aside class=\"side-notes\">
 <section><h2 class=\"t-h3\">Using a stone</h2>
 <p>Run this in a package directory, then <code class=\"ic\">use {esc(example)}::..;</code> in your code.</p>
-<div class=\"inst\"><div class=\"ipanel on\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>rok add {esc(example)}</code></pre></div></div></section>
+<div class=\"inst\"><div class=\"ipanel on\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>rok add {esc(example)}</code></pre>{chrome::copy_button("rok add " + example, false)}</div></div></section>
 <section><h2 class=\"t-h3\">Publishing</h2>
 <p>A version is one line in the <a href=\"{esc(site.index_repo)}\">index repository</a> naming a commit of the stone's own repository. Until publishing opens to everyone, send that line as a pull request.</p>
 <p><a href=\"/publishing#publishing\">How publishing works</a></p></section>
@@ -373,11 +375,11 @@ fn install_box(s: Stone, id: str) -> str {
     // As `rok add` writes it into a multi-line rok.rokon.
     let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
     // From the stone's own API (apidoc::import_line), shown under both tabs.
-    let use_line = if s.import.is_empty() { "" } else { f"<div class=\"iuse\"><p class=\"t-small\">Then in your code</p><pre><code class=\"language-rok\">{rok_syntax::highlight_rok(s.import)}</code></pre></div>" };
+    let use_line = if s.import.is_empty() { "" } else { f"<div class=\"iuse\"><p class=\"t-small\">Then in your code</p><pre><code class=\"language-rok\">{rok_syntax::highlight_rok(s.import)}</code></pre>{chrome::copy_button(s.import, false)}</div>" };
     f"<div class=\"inst\">
 <div class=\"itabs\" role=\"tablist\" aria-label=\"Install with\"><button type=\"button\" role=\"tab\" id=\"{id}t-add\" aria-controls=\"{id}p-add\" aria-selected=\"true\">rok add</button><button type=\"button\" role=\"tab\" id=\"{id}t-rokon\" aria-controls=\"{id}p-rokon\" aria-selected=\"false\" tabindex=\"-1\">rok.rokon</button></div>
-<div class=\"ipanel on\" role=\"tabpanel\" id=\"{id}p-add\" aria-labelledby=\"{id}t-add\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>{esc(add)}</code></pre></div>{use_line}
-<div class=\"ipanel\" role=\"tabpanel\" id=\"{id}p-rokon\" aria-labelledby=\"{id}t-rokon\"><pre><code class=\"language-rokon\">{rok_syntax::highlight_rokon(manifest)}</code></pre></div>
+<div class=\"ipanel on\" role=\"tabpanel\" id=\"{id}p-add\" aria-labelledby=\"{id}t-add\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>{esc(add)}</code></pre>{chrome::copy_button(add, false)}</div>{use_line}
+<div class=\"ipanel\" role=\"tabpanel\" id=\"{id}p-rokon\" aria-labelledby=\"{id}t-rokon\"><pre><code class=\"language-rokon\">{rok_syntax::highlight_rokon(manifest)}</code></pre>{chrome::copy_button(manifest, false)}</div>
 </div>"
 }
 
@@ -542,16 +544,9 @@ pub fn dependents_page(site: Site, s: Stone) -> str {
     stone_frame(site, s, "dependents", b.to_str())
 }
 
-/// Body of `404.html`, a compiler-style error; search.js fills in the path.
+/// Body of `404.html`, the 404 every Rok site shares; search.js names
+/// the path.
 pub fn not_found() -> str {
-    "<div class=\"frame lost\">
-<h1 class=\"t-h1\">Page not found</h1>
-<p class=\"t-lead\">Nothing is published at this address.</p>
-<pre class=\"term\"><code><span class=\"e\">error[E404]</span>: no such stone or page
- <span class=\"g\">--&gt;</span> <span id=\"lost-path\">this address</span>
-  <span class=\"g\">|</span>
-  <span class=\"g\">=</span> <span class=\"h\">help</span>: search with <kbd class=\"kbd\">/</kbd>, or browse <a href=\"/stones\">all stones</a></code></pre>
-<p><a href=\"/\">Back to rokstones</a></p>
-</div>
-"
+    let sentence = "There is no stone or page at <code id=\"lost-path\">this address</code>. Search with <kbd class=\"kbd\">/</kbd>, or go to:";
+    f"<div class=\"frame lost-page\">{chrome::not_found("Page not found", sentence, [("/stones", "All stones"), ("/publishing", "Publishing"), ("/", "rokstones home")])}</div>\n"
 }
