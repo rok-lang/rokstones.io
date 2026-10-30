@@ -54,7 +54,7 @@
   }
 
   // Install boxes: tabs plus a copy button per panel.
-  for (const p of document.querySelectorAll(".ipanel")) {
+  for (const p of document.querySelectorAll(".ipanel, .iuse")) {
     const pre = p.querySelector("pre");
     p.append(copyButton(() => pre.innerText.replace(/^\$ /, ""), "copy"));
   }
@@ -101,18 +101,37 @@
   const lost = document.getElementById("lost-path");
   if (lost) lost.textContent = location.pathname;
 
+  // Every term must be in the name or the description; `why` says
+  // where they were found.
   const match = (data, query) => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     const q = terms.join(" ");
     const hits = [];
     for (const e of data) {
       const t = e.t.toLowerCase();
-      const hay = t + " " + e.p.toLowerCase();
-      if (!terms.every((w) => hay.includes(w))) continue;
+      const p = e.p.toLowerCase();
+      if (!terms.every((w) => t.includes(w) || p.includes(w))) continue;
+      const inName = terms.some((w) => t.includes(w));
+      const inDesc = terms.some((w) => p.includes(w));
+      e.why = inName && inDesc ? "name and description" : inName ? "name" : "description";
       hits.push([t === q ? 0 : t.startsWith(q) ? 1 : t.includes(q) ? 2 : 3, e]);
     }
     hits.sort((a, b) => a[0] - b[0] || a[1].t.localeCompare(b[1].t));
     return [hits.map((h) => h[1]), terms];
+  };
+
+  // The part of a description worth showing in one line: from a little
+  // before the first matched term when it would be cut off.
+  const snippet = (text, terms) => {
+    const lo = text.toLowerCase();
+    let at = -1;
+    for (const w of terms) {
+      const k = lo.indexOf(w);
+      if (k >= 0 && (at < 0 || k < at)) at = k;
+    }
+    if (at < 48) return text;
+    const from = text.lastIndexOf(" ", at - 20);
+    return "..." + text.slice(from < 0 ? at - 20 : from + 1);
   };
 
   // `text` as nodes, each term wrapped in <mark>.
@@ -174,10 +193,16 @@
         const v = document.createElement("span");
         v.className = "v";
         v.textContent = e.v;
-        a.append(n, v);
+        const vw = document.createElement("span");
+        vw.className = "vw";
+        const why = document.createElement("span");
+        why.className = "why";
+        why.textContent = "in " + e.why;
+        vw.append(why, v);
+        a.append(n, vw);
         if (e.p) {
           const s = document.createElement("small");
-          s.textContent = e.p;
+          s.append(...marked(snippet(e.p, terms), terms));
           a.append(s);
         }
         li.append(a);
@@ -224,6 +249,21 @@
           li.style.order = want.get(name) ?? 0;
           const nm = li.querySelector(".nm");
           nm.replaceChildren(...marked(name, terms));
+          const desc = li.querySelector(".desc:not(.none)");
+          if (desc) {
+            desc.dataset.text ??= desc.textContent;
+            desc.replaceChildren(...marked(desc.dataset.text, terms));
+          }
+          const e = hits[want.get(name)];
+          let why = li.querySelector(".why");
+          if (e) {
+            if (!why) {
+              why = document.createElement("span");
+              why.className = "why";
+              li.querySelector(".nl").append(why);
+            }
+            why.textContent = "matches " + e.why;
+          }
         }
         list.style.display = "flex";
         list.style.flexDirection = "column";
