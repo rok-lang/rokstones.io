@@ -64,14 +64,18 @@ fn og_inputs(tpl: str) throws -> Digest {
     let d = Digest::new(HashAlgorithm::Sha256);
     let files = ["og/render.mjs", "og/" + tpl, "og/logo.svg", "static/rok.css"];
     if tpl == "home.html" { files.push("static/og.png"); }
-    for entry in fs::walk("og/fonts") {
-        let e = try entry.get();
-        if e.is_file() { files.push(e.path().as_str()); }
+    // A missing input only changes the version, so its pages fall back to
+    // the site card; it must never stop the server.
+    if fs::exists("og/fonts") {
+        for entry in fs::walk("og/fonts") {
+            let e = try entry.get() catch _ { continue; };
+            if e.is_file() { files.push(e.path().as_str()); }
+        }
     }
     files.sort();
     for f in files {
         d.update(f + "\n");
-        d.update(try fs::read(f));
+        d.update(try fs::read(f) catch _ { continue; });
     }
     d
 }
