@@ -113,7 +113,17 @@ req GET /style.css
 [ "$(header content-type)" = "text/css; charset=utf-8" ] || fail "css type"
 mkdir -p "$T/site/public/empty"
 req GET /empty/
+expect_code 301 "trailing slash"
+[ "$(header location)" = "/empty" ] || fail "trailing slash location: $(header location)"
+req GET /empty
 expect_code 404 "no directory listing"
+req GET "/index.html?a=1&b=2"
+expect_code 301 "index.html"
+[ "$(header location)" = "/?a=1&b=2" ] || fail "index.html location: $(header location)"
+req GET /publishing.html
+[ "$code" = 301 ] && [ "$(header location)" = "/publishing" ] || fail "publishing.html: $code $(header location)"
+req GET /publishing
+expect_code 200 "extensionless page"
 code=$(curl -s -o /dev/null -w '%{http_code}' --path-as-is "$base/../site.rokon")
 [ "$code" = 400 ] || [ "$code" = 404 ] || fail "path traversal: $code"
 code=$(curl -s -o /dev/null -w '%{http_code}' --path-as-is "$base/%2e%2e/site.rokon")

@@ -631,19 +631,11 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
         return try account_route(cfg, site, r);
     }
     if !get { return message(site, p, 405, "Method not allowed", "Only GET here."); }
-    // Clean URLs: 308 a *.html path to its extensionless form (/index.html to its directory).
-    if p.ends_with(".html") {
-        let clean = if p.ends_with("/index.html") { p[:p.len() - "index.html".len()] } else { p[:p.len() - ".html".len()] };
-        return Resp { status: 308, headers: [f"Location: {clean}", "Cache-Control: no-cache"], body: "", file: "" };
+    if let c: str = http::canonical(p) {
+        return Resp { status: 301, headers: [http::moved(c, r.query), "Cache-Control: public, max-age=3600"], body: "", file: "" };
     }
-    if let f: str = http::static_file(site.out, p) {
+    if let f: str = http::page_file(site.out, p) {
         return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: no-cache"], body: "", file: f };
-    }
-    // A bare path names the .html page (/stones/json -> stones/json.html).
-    if !p.ends_with("/") {
-        if let g: str = http::static_file(site.out, p + ".html") {
-            return Resp { status: 200, headers: [f"Content-Type: {http::content_type(g)}", "Cache-Control: no-cache"], body: "", file: g };
-        }
     }
     message(site, p, 404, "Not found", "No page here.")
 }
