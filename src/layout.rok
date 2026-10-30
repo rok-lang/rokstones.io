@@ -342,8 +342,9 @@ fn stone_head(out: str, s: Stone, tab: str) -> str {
 fn side(site: Site, out: str, s: Stone) -> str {
     let l = s.latest;
     let r = root_of(out);
-    let req = stones::caret(l.vers);
+    let req = stones::add_req(l.vers);
     let add = if stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
+    // As `rok add` writes it into a multi-line rok.rokon.
     let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
     let install = if l.yanked {
         "<p class=\"t-ui muted\">Not installable: every version is yanked.</p>"

@@ -181,16 +181,10 @@ fn pick_latest(vs: List<Version>) -> Version {
     best
 }
 
-/// The requirement `rok add` would write: `^1.2`, `^0.3`, `^0.0.4`.
-pub fn caret(v: str) -> str {
-    let (core, pre) = split_vers(v);
-    if !pre.is_empty() { return "=" + v; }
-    let xs: List<str> = List::new();
-    for p in core.split(".") { xs.push(p); }
-    if xs.len() < 3 { return "^" + core; }
-    if xs[0] != "0" { return f"^{xs[0]}.{xs[1]}"; }
-    if xs[1] != "0" { return f"^0.{xs[1]}"; }
-    f"^0.0.{xs[2]}"
+/// The requirement `rok add` writes for `v`: `^` and the version, or `=`
+/// for a pre-release, which `rok add` only takes as `name@=<version>`.
+pub fn add_req(v: str) -> str {
+    if is_pre(v) { "=" + v } else { "^" + v }
 }
 
 fn get_str(f: OrderedDict<str, Value>, k: str) -> str | none {
@@ -508,7 +502,7 @@ fn semver_order() {
     expect(cmp_vers("1.0.0-alpha.2", "1.0.0-alpha.10") == Ordering::Less, "numeric pre ids");
     expect(cmp_vers("1.0.0-alpha", "1.0.0-alpha.1") == Ordering::Less, "shorter pre first");
     expect(cmp_vers("1.0.0+b", "1.0.0") == Ordering::Equal, "build ignored");
-    expect(caret("1.2.3") == "^1.2" && caret("0.3.1") == "^0.3" && caret("0.0.4") == "^0.0.4", "caret");
+    expect(add_req("1.2.3") == "^1.2.3" && add_req("0.1.0") == "^0.1.0" && add_req("1.0.0-rc.1") == "=1.0.0-rc.1", "add_req");
 }
 
 #[test]
