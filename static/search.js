@@ -22,6 +22,8 @@
     const d = s === "dark" || (s !== "light" && dark.matches);
     html.classList.toggle("dk", d);
     html.classList.toggle("lt", !d);
+    const m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.content = d ? "#090a0d" : "#fbfbfc";
     if (tb) {
       tb.setAttribute("aria-pressed", d ? "true" : "false");
       tb.title = d ? "Switch to light theme" : "Switch to dark theme";

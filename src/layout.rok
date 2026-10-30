@@ -90,6 +90,8 @@ fn head(site: Site, full: str, desc: str, url: str, img: str, alt: str) -> str {
     let alt = esc(alt);
     f"<meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<meta name=\"color-scheme\" content=\"light dark\">
+<meta name=\"theme-color\" content=\"#fbfbfc\">
 <title>{esc(full)}</title>
 <script src=\"/theme.js\"></script>
 <meta name=\"description\" content=\"{desc}\">
@@ -107,8 +109,6 @@ fn head(site: Site, full: str, desc: str, url: str, img: str, alt: str) -> str {
 <meta name=\"twitter:card\" content=\"summary_large_image\">
 <meta name=\"twitter:image\" content=\"{img}\">
 <meta name=\"twitter:image:alt\" content=\"{alt}\">
-<meta name=\"theme-color\" content=\"#fbfbfc\" media=\"(prefers-color-scheme: light)\">
-<meta name=\"theme-color\" content=\"#090a0d\" media=\"(prefers-color-scheme: dark)\">
 <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
 <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>
 <link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap\">
