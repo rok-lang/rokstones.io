@@ -223,7 +223,7 @@
       li.setAttribute("role", "none");
       if (!hits.length) {
         li.className = "empty";
-        li.textContent = data.length ? "No stone matches." : "No stones published yet.";
+        li.textContent = data.length ? "No stones match." : "No stones published yet.";
         box.append(li);
       } else if (hits.length > MAX) {
         li.className = "all";
@@ -231,7 +231,7 @@
         box.append(li);
       }
       show(true);
-      status.textContent = !hits.length ? "No stone matches" : hits.length === 1 ? "1 stone" : `${hits.length} stones`;
+      status.textContent = !hits.length ? "No stones match" : hits.length === 1 ? "1 stone" : `${hits.length} stones`;
       mark(-1);
     };
     q.addEventListener("focus", load, { once: true });
@@ -274,11 +274,16 @@
         const title = document.getElementById("list-title");
         title.textContent = "Search results";
         const note = document.getElementById("list-note");
-        note.textContent = `${hits.length === 1 ? "1 stone matches" : hits.length + " stones match"} “${query.trim()}”, best match first. `;
-        const all = document.createElement("a");
-        all.href = location.pathname;
-        all.textContent = "Show all stones";
-        note.append(all);
+        const qt = `“${query.trim()}”`;
+        if (!hits.length) {
+          note.textContent = `No stones match ${qt}.`;
+        } else {
+          note.textContent = hits.length === 1 ? `1 stone matches ${qt}. ` : `${hits.length} stones match ${qt}, best match first. `;
+          const all = document.createElement("a");
+          all.href = location.pathname;
+          all.textContent = "Show all stones";
+          note.append(all);
+        }
         document.title = `Search results for ${query.trim()} - rokstones.io`;
       });
     }

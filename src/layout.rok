@@ -260,7 +260,7 @@ pub fn all_stones(all: List<Stone>) -> str {
     let out = "stones/index.html";
     f"<div class=\"frame list-page\">
 <div class=\"page-head\"><h1 class=\"t-h2\" id=\"list-title\">All stones</h1><p class=\"t-small\" id=\"list-note\">{plural(all.len(), "stone", "stones")}, sorted by name.</p></div>
-{stone_rows(out, all, "No stones published yet.")}<p class=\"empty\" id=\"no-match\" hidden>No stone matches. Try a shorter word, or <a href=\"index.html\">see all stones</a>.</p>
+{stone_rows(out, all, "No stones published yet.")}<p class=\"empty\" id=\"no-match\" hidden>Try a shorter word, or <a href=\"index.html\">browse all stones</a>.</p>
 </div>
 "
 }
