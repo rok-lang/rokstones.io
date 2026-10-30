@@ -216,7 +216,9 @@
     document.addEventListener("click", (ev) => { if (!form.contains(ev.target)) show(false); });
     document.addEventListener("keydown", (ev) => {
       const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
-      if (ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); q.focus(); }
+      const slash = ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey;
+      const k = ev.key.toLowerCase() === "k" && (ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey;
+      if (slash || k) { ev.preventDefault(); q.focus(); q.select(); }
     });
 
     // The full list, filtered by ?q=.

@@ -21,6 +21,7 @@ button{font:inherit}
 .search:focus-within{border-color:var(--ink-3)}
 .search:focus-within .kbd{display:none}
 @media (min-width:768px){.search .q{font-size:14px}}
+@media (hover:none){.search .kbd{display:none}}
 .hdr .nav{margin-left:auto}
 .nav a[aria-current]{color:var(--ink);font-weight:500}
 .theme .sun,.dk .theme .moon{display:none}

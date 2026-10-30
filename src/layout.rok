@@ -79,7 +79,7 @@ fn icon_search() -> str {
 }
 
 fn search_box(root: str) -> str {
-    f"<form class=\"search\" role=\"search\" action=\"{root}stones/\">{icon_search()}<input class=\"q\" name=\"q\" type=\"search\" placeholder=\"Search stones\" aria-label=\"Search stones\" aria-keyshortcuts=\"/\" autocomplete=\"off\" spellcheck=\"false\" role=\"combobox\" aria-autocomplete=\"list\" aria-expanded=\"false\" aria-controls=\"results\"><kbd class=\"kbd\" aria-hidden=\"true\">/</kbd><ul id=\"results\" class=\"results\" role=\"listbox\" aria-label=\"Search results\" hidden></ul><p class=\"sr-only\" role=\"status\"></p></form>"
+    f"<form class=\"search\" role=\"search\" action=\"{root}stones/\">{icon_search()}<input class=\"q\" name=\"q\" type=\"search\" placeholder=\"Search stones\" aria-label=\"Search stones\" aria-keyshortcuts=\"/ Control+K Meta+K\" autocomplete=\"off\" spellcheck=\"false\" role=\"combobox\" aria-autocomplete=\"list\" aria-expanded=\"false\" aria-controls=\"results\"><kbd class=\"kbd\" aria-hidden=\"true\">/</kbd><ul id=\"results\" class=\"results\" role=\"listbox\" aria-label=\"Search results\" hidden></ul><p class=\"sr-only\" role=\"status\"></p></form>"
 }
 
 /// `<head>` from the charset to the icons. `root` leads to the icons and
