@@ -219,6 +219,9 @@ pub struct Resp {
     pub file: str;
 }
 
+// Cloudflare injects its Web Analytics beacon into every page it proxies.
+const CSP: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net; frame-ancestors 'none'; form-action 'self'";
+
 fn html(status: i32, body: str) -> Resp {
     Resp {
         status: status,
@@ -227,7 +230,7 @@ fn html(status: i32, body: str) -> Resp {
             "Cache-Control: no-store",
             "X-Frame-Options: DENY",
             "Referrer-Policy: same-origin",
-            "Content-Security-Policy: default-src 'self'; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net; frame-ancestors 'none'; form-action 'self'",
+            CSP,
         ],
         body: body,
         file: "",
