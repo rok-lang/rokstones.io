@@ -32,7 +32,7 @@ tests/e2e.sh              # end-to-end test of serve
 
 ## Preview
 
-Serve over HTTP (the search index is loaded with `fetch`). Links are extensionless (`/stones/json` is `stones/json.html`), which `rok run -- serve` resolves; a plain file server only opens the pages themselves:
+Serve over HTTP (the search index is loaded with `fetch`). Links are root-relative and canonical: no `.html`, a directory index is the directory, no trailing slash (`/stones/json` is `stones/json.html`, `/stones` is `stones/index.html`). `rok run -- serve` resolves them and answers `.html`, `/index` and trailing-slash paths with a 301 to the canonical one; a plain file server only opens the pages themselves:
 
 ```bash
 python3 -m http.server -d public 8000

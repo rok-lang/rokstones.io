@@ -1,12 +1,11 @@
 // Theme, header menu, stone search, copy buttons, install tabs.
-// search-index.json: [{t: name, u: url, v: latest version, p: description}].
+// search-index.json: [{t: name, u: canonical path, v: latest version, p: description}].
 (() => {
-  const root = document.body.dataset.root || "";
   const html = document.documentElement;
   let index = null;
   const load = () =>
     index ? Promise.resolve(index)
-      : fetch(root + "search-index.json").then((r) => r.json()).then((d) => (index = d));
+      : fetch("/search-index.json").then((r) => r.json()).then((d) => (index = d));
 
   // Theme: "light" or "dark" in the theme cookie and localStorage.theme;
   // neither follows the system. theme.js reads them in the same order.
@@ -202,7 +201,7 @@
         a.id = "results-" + k;
         a.setAttribute("role", "option");
         a.tabIndex = -1;
-        a.href = root + e.u.replace(/\.html$/, "");
+        a.href = e.u;
         const n = document.createElement("span");
         n.className = "n";
         n.append(...marked(e.t, terms));
