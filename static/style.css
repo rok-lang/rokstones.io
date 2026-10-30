@@ -48,7 +48,8 @@ button{font:inherit}
 html:not(.js) .theme,html:not(.js) .seg{display:none}
 
 /* search results */
-.results{position:absolute;z-index:10;top:calc(100% + 6px);left:-1px;right:-1px;margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:0 8px 24px color-mix(in oklch,var(--ink) 12%,transparent);max-height:min(420px,70vh);overflow-y:auto;cursor:default}
+.results{position:absolute;z-index:10;top:calc(100% + 6px);left:-1px;right:-1px;margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:0 8px 24px rgba(21,22,27,.12);max-height:min(420px,70vh);overflow-y:auto;cursor:default}
+.dk .results{box-shadow:0 8px 24px rgba(237,238,242,.12)}
 .results a{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 10px;border-radius:6px;color:var(--ink);text-decoration:none!important}
 .results a[aria-selected=true],.results a:hover{background:var(--bg-2)}
 .results .n{font-family:var(--mono);font-size:14px;line-height:20px;font-weight:500;color:var(--ink)}
@@ -77,9 +78,17 @@ mark{background:none;color:inherit;text-decoration:underline;text-decoration-col
 
 /* glyphs: hue per stone from the name hash */
 .gl{display:block;flex:none}
-.gl path{fill:light-dark(oklch(0.7 0.11 var(--h)),oklch(0.78 0.09 var(--h)))}
-.gl-box{width:72px;height:72px;flex:none;border-radius:18px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;background:light-dark(oklch(0.95 0.035 var(--h)),oklch(0.26 0.05 var(--h)))}
-.gl-box .gl path{fill:light-dark(oklch(0.66 0.14 var(--h)),oklch(0.82 0.11 var(--h)))}
+.gl path{fill:var(--ink-3)}
+.gl-box{width:72px;height:72px;flex:none;border-radius:18px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;background:var(--bg-2)}
+/* grey above for engines without oklch() (Safari < 15.4) */
+@supports (color:oklch(0 0 0)){
+  .gl path{fill:oklch(0.7 0.11 var(--h))}
+  .dk .gl path{fill:oklch(0.78 0.09 var(--h))}
+  .gl-box{background:oklch(0.95 0.035 var(--h))}
+  .dk .gl-box{background:oklch(0.26 0.05 var(--h))}
+  .gl-box .gl path{fill:oklch(0.66 0.14 var(--h))}
+  .dk .gl-box .gl path{fill:oklch(0.82 0.11 var(--h))}
+}
 
 /* home */
 .intro{padding-top:56px;padding-bottom:40px;display:flex;flex-direction:column;gap:10px}
@@ -119,9 +128,9 @@ pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);fo
 .tabs-line{margin-top:10px;border-bottom:1px solid var(--line)}
 .stone-head .tabs{border-bottom:0;scrollbar-width:none}
 .stone-head .tabs::-webkit-scrollbar{display:none}
-.tabs.more-r{mask-image:linear-gradient(to right,#000 calc(100% - 40px),transparent)}
-.tabs.more-l{mask-image:linear-gradient(to left,#000 calc(100% - 40px),transparent)}
-.tabs.more-l.more-r{mask-image:linear-gradient(to right,transparent,#000 40px,#000 calc(100% - 40px),transparent)}
+.tabs.more-r{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 40px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 40px),transparent)}
+.tabs.more-l{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 40px),transparent);mask-image:linear-gradient(to left,#000 calc(100% - 40px),transparent)}
+.tabs.more-l.more-r{-webkit-mask-image:linear-gradient(to right,transparent,#000 40px,#000 calc(100% - 40px),transparent);mask-image:linear-gradient(to right,transparent,#000 40px,#000 calc(100% - 40px),transparent)}
 .inst-head{display:none}
 .tabs a:hover{color:var(--ink);text-decoration:none}
 .stone-body{display:grid;grid-template-columns:minmax(0,1fr) 340px}
@@ -141,7 +150,7 @@ html.js .ipanel:not(.on){display:none}
 html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .ipanel{position:relative}
 .ipanel pre{font-size:13px;line-height:20px;padding:10px 76px 10px 12px;overflow-x:auto;margin:0}
-.ipanel .p{color:var(--acc);user-select:none}
+.ipanel .p{color:var(--acc);-webkit-user-select:none;user-select:none}
 .ipanel .copy{position:absolute;top:6px;right:6px}
 .vers ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .vers li{display:flex;align-items:center;gap:10px;font-size:14px;line-height:20px}
@@ -189,7 +198,8 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .md .callout{display:block;border:1px solid var(--note-line);background:var(--note-bg);border-radius:6px;padding:12px 16px;font-size:15px;line-height:24px}
 .md .callout>*+*{margin-top:8px}
 .md .callout-title{font-weight:600;color:var(--note-ink);font-size:14px}
-.md .callout:is(.warning,.caution,.important){border-color:color-mix(in oklch,var(--acc) 35%,var(--line));background:var(--acc-bg)}
+.md .callout:is(.warning,.caution,.important){border-color:var(--acc);background:var(--acc-bg)}
+@supports (color:color-mix(in oklch,red,blue)){.md .callout:is(.warning,.caution,.important){border-color:color-mix(in oklch,var(--acc) 35%,var(--line))}}
 .md .callout:is(.warning,.caution,.important) .callout-title{color:var(--acc)}
 .md sup{line-height:0}
 .md .footnotes{font-size:14px;line-height:21px;color:var(--ink-2);border-top:1px solid var(--line);padding-top:16px}
