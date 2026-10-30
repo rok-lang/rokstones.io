@@ -15,6 +15,7 @@ use rok::std::rokon::Value;
 use rok::std::rokon::write;
 use rok::std::process::{Command, Stdio, ChildStdin, ChildStdout};
 use rok::std::thread;
+use rok::std::io::byte_buf;
 use rok::std::time::{Duration, SystemTime};
 use rok::core::task::time::Instant;
 use markdown::esc;
@@ -645,10 +646,38 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     if let c: str = url::canonical(p) {
         return Resp { status: 301, headers: [url::moved(c, r.query), "Cache-Control: public, max-age=3600"], body: "", file: "" };
     }
-    if let f: str = http::page_file(site.out, p) {
-        return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: " + cache_for(p, f, r.query)], body: "", file: f };
+    // A rebuild renames `public/` away and the new site into its place
+    // (main.rok): in between there is no site, which is not a 404.
+    for k in 0..5 {
+        if k > 0 {
+            if fs::exists(site.out) { break; }
+            thread::sleep(Duration::ms(50));
+        }
+        if let f: str = http::page_file(site.out, p) {
+            return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: " + cache_for(p, f, r.query)], body: "", file: f };
+        }
     }
     message(site, p, 404, "Not found", "No page here.")
+}
+
+/// The bytes of `file`, found for `path`. A rebuild swaps `public/` for
+/// the new site (main.rok), so a file found a moment ago can be gone:
+/// look it up again a few times before giving up. Never an empty 200.
+fn read_page(site: Site, path: str, file: str) -> List<u8> | none {
+    let f = file;
+    for k in 0..4 {
+        if k > 0 {
+            thread::sleep(Duration::ms(50));
+            f = http::page_file(site.out, path) ?? f;
+        }
+        let got = true;
+        let b = try fs::read(f) catch _ {
+            got = false;
+            List::new()
+        };
+        if got { return b; }
+    }
+    none
 }
 
 fn handle(s: TcpStream, cfg: Cfg, site: Site) {
@@ -664,8 +693,13 @@ fn handle(s: TcpStream, cfg: Cfg, site: Site) {
     };
     let head = r.method == "HEAD";
     if !resp.file.is_empty() {
-        let data = try fs::read(resp.file) catch _ { List::new() };
-        try http::send(s, 200, resp.headers, data, head) catch _ {};
+        if let data: List<u8> = read_page(site, r.path, resp.file) {
+            try http::send(s, 200, resp.headers, data, head) catch _ {};
+        } else {
+            resp = message(site, r.path, 503, "Try again", "The site is being rebuilt. Reload the page in a moment.");
+            resp.headers.push("Retry-After: 1");
+            try http::send(s, resp.status, resp.headers, resp.body, head) catch _ {};
+        }
     } else {
         try http::send(s, resp.status, resp.headers, resp.body, head) catch _ {};
     }
@@ -735,7 +769,12 @@ pub fn serve(site: Site) throws {
             };
             if ACTIVE.fetch_add(1) >= MAX_CONNS {
                 ACTIVE.fetch_sub(1);
-                try http::send(s, 503, ["Content-Type: text/plain; charset=utf-8"], "busy\n", false) catch _ {};
+                // Read what the request sent first: closing a socket with
+                // unread data resets it, and a proxy that sees the reset
+                // before the answer reports a 502 instead of this 503.
+                try s.set_read_timeout(Duration::ms(20)) catch _ {};
+                try s.read(byte_buf(16384)) catch _ { 0usize };
+                try http::send(s, 503, ["Content-Type: text/plain; charset=utf-8", "Retry-After: 1"], "busy\n", false) catch _ {};
                 s.close();
                 continue;
             }
