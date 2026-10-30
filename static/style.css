@@ -37,7 +37,8 @@ button{font:inherit}
 .search:focus-within .kbd{display:none}
 @media (min-width:768px){.search .q{font-size:14px}}
 @media (hover:none){.search .kbd{display:none}}
-.hdr .nav{margin-left:auto}
+.hdr .nav{margin-left:auto;flex-wrap:nowrap}
+.hdr .nav a{white-space:nowrap}
 .nav a[aria-current]{color:var(--ink);font-weight:500}
 .theme .sun,.dk .theme .moon{display:none}
 .dk .theme .sun{display:block}
@@ -236,6 +237,8 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 /* narrow */
 @media (max-width:1000px){
   .login .wide{display:none}
+  .hdr .in{gap:16px}
+  .hdr .search{min-width:120px}
   .home{grid-template-columns:minmax(0,1fr);gap:48px}
   .side-notes{flex-direction:row;flex-wrap:wrap;padding-top:0}
   .side-notes section{flex:1 1 280px}
