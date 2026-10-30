@@ -1,47 +1,11 @@
-// Theme, header menu, stone search, copy buttons, install tabs.
+// Header menu, stone search, copy buttons, install tabs. The theme is
+// theme.js and the search shortcut keys.js, from the web kit.
 // search-index.json: [{t: name, u: canonical path, v: latest version, p: description}].
 (() => {
-  const html = document.documentElement;
   let index = null;
   const load = () =>
     index ? Promise.resolve(index)
       : fetch("/search-index.json").then((r) => r.json()).then((d) => (index = d));
-
-  // Theme: "light" or "dark" in the theme cookie and localStorage.theme;
-  // neither follows the system. theme.js reads them in the same order.
-  const dark = matchMedia("(prefers-color-scheme: dark)");
-  const stored = () => {
-    const c = (document.cookie.match(/(?:^|; )theme=(light|dark)(?:;|$)/) || [])[1];
-    if (c) return c;
-    try { return localStorage.getItem("theme"); } catch { return null; }
-  };
-  const tb = document.querySelector(".theme");
-  const seg = document.querySelectorAll(".seg button");
-  const apply = () => {
-    const s = stored();
-    const d = s === "dark" || (s !== "light" && dark.matches);
-    html.classList.toggle("dk", d);
-    html.classList.toggle("lt", !d);
-    const m = document.querySelector('meta[name="theme-color"]');
-    if (m) m.content = d ? "#090a0d" : "#fbfbfc";
-    if (tb) {
-      tb.setAttribute("aria-pressed", d ? "true" : "false");
-      tb.title = d ? "Switch to light theme" : "Switch to dark theme";
-    }
-    const cur = s === "light" || s === "dark" ? s : "system";
-    seg.forEach((b) => b.setAttribute("aria-pressed", b.dataset.theme === cur ? "true" : "false"));
-  };
-  const choose = (t) => {
-    const keep = t === "system" ? "Max-Age=0" : "Max-Age=31536000";
-    const secure = location.protocol === "https:" ? "; Secure" : "";
-    document.cookie = `theme=${t === "system" ? "" : t}; Path=/; ${keep}; SameSite=Lax${secure}`;
-    try { t === "system" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); } catch {}
-    apply();
-  };
-  if (tb) tb.addEventListener("click", () => choose(html.classList.contains("dk") ? "light" : "dark"));
-  seg.forEach((b) => b.addEventListener("click", () => choose(b.dataset.theme)));
-  dark.addEventListener("change", apply);
-  apply();
 
   // Narrow header: the menu button shows the nav below.
   const hdr = document.querySelector(".hdr");
@@ -244,13 +208,6 @@
       else if (ev.key === "Escape") { if (!box.hidden) show(false); else q.blur(); }
     });
     document.addEventListener("click", (ev) => { if (!form.contains(ev.target)) show(false); });
-    document.addEventListener("keydown", (ev) => {
-      const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
-      const slash = ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey;
-      // ev.code too: with Caps Lock or a Korean IME the key is "K" or "ㅏ".
-      const k = (ev.code === "KeyK" || ev.key.toLowerCase() === "k") && (ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey;
-      if (slash || k) { ev.preventDefault(); q.focus(); q.select(); }
-    });
 
     // The full list, filtered by ?q=.
     const list = document.querySelector(".list-page .rows");

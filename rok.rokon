@@ -4,5 +4,6 @@ Package {
     deps: {
         "markdown": "0.1",
         "rok-syntax": "0.1",
+        "web": Dep::path("web/rok"),
     },
 }

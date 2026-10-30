@@ -20,8 +20,9 @@ use rok::core::task::time::Instant;
 use markdown::esc;
 use pkg::Site;
 use pkg::layout;
-use pkg::http;
-use pkg::http::Request;
+use web::http;
+use web::http::Request;
+use web::url;
 use pkg::index;
 use pkg::index::ApiError;
 use pkg::secret;
@@ -641,8 +642,8 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
         return try account_route(cfg, site, r);
     }
     if !get { return message(site, p, 405, "Method not allowed", "Only GET here."); }
-    if let c: str = http::canonical(p) {
-        return Resp { status: 301, headers: [http::moved(c, r.query), "Cache-Control: public, max-age=3600"], body: "", file: "" };
+    if let c: str = url::canonical(p) {
+        return Resp { status: 301, headers: [url::moved(c, r.query), "Cache-Control: public, max-age=3600"], body: "", file: "" };
     }
     if let f: str = http::page_file(site.out, p) {
         return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: " + cache_for(p, f, r.query)], body: "", file: f };

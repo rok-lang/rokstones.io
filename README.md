@@ -4,7 +4,7 @@ Source for https://rokstones.io, the Rok package registry site and server. Rok p
 
 ## Build
 
-Needs the Rok toolchain (`rok`, `rokc`), `git`, and an index checkout. The default config assumes the repos sit side by side:
+Needs the Rok toolchain (`rok`, `rokc`), `git`, an index checkout, and the [web kit](https://github.com/rok-lang/web) submodule at `web/` (clone with `git clone --recurse-submodules`, or run `git submodule update --init` in an existing clone). The default config assumes the repos sit side by side:
 
 ```
 ./
@@ -29,6 +29,16 @@ tests/e2e.sh              # end-to-end test of serve
 ```
 
 `fixtures/` holds a sample index (`--demo`) with more stones and edge cases than the real one, for checking the site without git or network. Stone-page READMEs are fetched by commit into `.cache/` and rendered untrusted (HTML shown as text, non-http(s)/mailto links dropped).
+
+## Web kit
+
+`web/` is [rok-lang/web](https://github.com/rok-lang/web), pinned to a commit. The site builds its `web` library in (`Dep::path("web/rok")`): HTTP, the canonical-address rules, the shared header and footer markup, and the kit's files, which every build writes into `public/` at `/rok.css`, `/theme.js`, `/keys.js`, `/rok.svg`, and the rokstones `/logo.svg`, `/favicon.ico` and `/apple-touch-icon.png`. The server needs nothing from `web/` at run time; `og/render.mjs` reads `web/css/rok.css` and the mark through the templates. Move to a newer kit with:
+
+```bash
+git submodule update --remote web
+rok run -- check && rok test
+git commit -am "chore: bump the web kit"
+```
 
 ## Preview
 
@@ -75,7 +85,7 @@ rokstones.io {
 
 ## Link previews
 
-og:image and twitter:image carry `?v=<card version>`: the first 10 hex digits of the SHA-256 of what `og/render.mjs` draws the card from (renderer, template, fonts, logo, `rok.css`, the stone's name, version and description; for the home card also `static/og.png`), so a changed card is a new URL. The renderer writes `<card>.png.v` with the version it drew; `serve` caches a card at that `?v=` for a year (`immutable`), anything else for an hour, and a rebuild keeps only cards whose `.v` still matches. A stone page whose card is not drawn yet points at the site card (`/og.png?v=..`) instead, so after a build that changes cards run `node og/render.mjs` (it skips cards already drawn) and build again. `serve` does both itself after each rebuild when `og/node_modules` is installed (needs node and Chrome); otherwise new stones show the site card until a deploy draws theirs. When only a page's text changes, the cached card stays: re-scrape it with the [Facebook Sharing Debugger](https://developers.facebook.com/tools/debug/), the [LinkedIn Post Inspector](https://www.linkedin.com/post-inspector/) or Kakao's [sharing debugger](https://developers.kakao.com/tool/debugger/sharing) (clear the cache); X has no tool and refreshes in about 7 days.
+og:image and twitter:image carry `?v=<card version>`: the first 10 hex digits of the SHA-256 of what `og/render.mjs` draws the card from (renderer, template, fonts, the kit's mark and `rok.css`, the stone's name, version and description; for the home card also `static/og.png`), so a changed card is a new URL. The renderer writes `<card>.png.v` with the version it drew; `serve` caches a card at that `?v=` for a year (`immutable`), anything else for an hour, and a rebuild keeps only cards whose `.v` still matches. A stone page whose card is not drawn yet points at the site card (`/og.png?v=..`) instead, so after a build that changes cards run `node og/render.mjs` (it skips cards already drawn) and build again. `serve` does both itself after each rebuild when `og/node_modules` is installed (needs node and Chrome); otherwise new stones show the site card until a deploy draws theirs. When only a page's text changes, the cached card stays: re-scrape it with the [Facebook Sharing Debugger](https://developers.facebook.com/tools/debug/), the [LinkedIn Post Inspector](https://www.linkedin.com/post-inspector/) or Kakao's [sharing debugger](https://developers.kakao.com/tool/debugger/sharing) (clear the cache); X has no tool and refreshes in about 7 days.
 
 ## Configuration
 
@@ -87,14 +97,14 @@ Edit `site.rokon` (ROKON). Key fields: `title`, `tagline`, `description`, `index
 |------|----------|
 | `src/main.rok`   | Config/args, page generation, search index, link check; `serve` |
 | `src/server.rok` | `serve`: settings, `db.rokon`, GitHub login, account page, API, rebuilds |
-| `src/http.rok`   | HTTP/1.1 requests/responses, forms, cookies, static files |
 | `src/index.rok`  | API entry checks, index commits and pushes |
 | `src/secret.rok` | SHA-256, random bytes, constant-time compare |
 | `src/stones.rok` | Reads the index, semver ordering, dependents, README fetching |
 | `src/layout.rok` | Page frame, home, stone list, publishing guide, stone pages and their tabs |
 | `tests/`         | `e2e.sh` and the fake GitHub it runs |
 | `pages/publishing.md` | Publishing guide text |
-| `static/`        | `rok.css` (copied from [rok-lang/web](https://github.com/rok-lang/web); do not edit here), `style.css`, `theme.js`, `search.js`, marks |
+| `static/`        | `style.css`, `search.js`, `og.png` |
+| `web/`           | the web kit (submodule): `rok.css`, `theme.js`, `keys.js`, marks and icons, and the `web` library (HTTP, addresses, header and footer markup) |
 | `og/`            | Open Graph cards: `node og/render.mjs` after a build, then build again |
 
 Markdown and highlighting come from the [`markdown`](https://github.com/rok-lang/markdown) and [`rok-syntax`](https://github.com/rok-lang/rok-syntax) stones (path dependencies until switched to their rokstones.io versions).

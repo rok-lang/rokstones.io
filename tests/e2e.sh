@@ -38,7 +38,7 @@ git -C "$T/index" push -q -u origin HEAD 2>/dev/null
 mkdir -p "$T/site"
 cp -R "$repo/static" "$repo/pages" "$T/site/"
 mkdir -p "$T/site/og"
-cp -R "$repo/og/render.mjs" "$repo/og/home.html" "$repo/og/stone.html" "$repo/og/logo.svg" "$repo/og/fonts" "$T/site/og/"
+cp -R "$repo/og/render.mjs" "$repo/og/home.html" "$repo/og/stone.html" "$repo/og/fonts" "$T/site/og/"
 sed -e 's|^ *out: .*|    out: "public",|' "$repo/site.rokon" > "$T/site/site.rokon"
 
 "$repo/tests/fake-github/target/debug/fake_github" "127.0.0.1:$gh_port" test-secret &

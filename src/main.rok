@@ -11,7 +11,6 @@
 mod layout;
 mod stones;
 mod secret;
-mod http;
 mod index;
 mod server;
 
@@ -22,6 +21,8 @@ use rok::core::crypto::HashAlgorithm;
 use rok::core::crypto::sha2::Digest;
 use rok::core::task::time::Instant;
 use layout::dir_of;
+use web::kit;
+use web::url;
 
 #[derive(Rokon)]
 pub struct Site {
@@ -59,10 +60,15 @@ fn load_site() throws -> Site {
 
 /// A running hash of what og/render.mjs draws a card from: itself, the
 /// template, the assets the templates load, and for the home card the
-/// static/og.png it replaces. og_version adds the card's text.
+/// static/og.png it replaces. og_version adds the card's text. The kit's
+/// stylesheet and mark come from the copies built in, so a server
+/// without web/ beside it still agrees with the build.
 fn og_inputs(tpl: str) throws -> Digest {
     let d = Digest::new(HashAlgorithm::Sha256);
-    let files = ["og/render.mjs", "og/" + tpl, "og/logo.svg", "static/rok.css"];
+    let built: Dict<str, str> = Dict::new();
+    built.insert("web/assets/rokstones.svg", kit::ROKSTONES_SVG);
+    built.insert("web/css/rok.css", kit::ROK_CSS);
+    let files = ["og/render.mjs", "og/" + tpl, "web/assets/rokstones.svg", "web/css/rok.css"];
     if tpl == "home.html" { files.push("static/og.png"); }
     // A missing input only changes the version, so its pages fall back to
     // the site card; it must never stop the server.
@@ -75,6 +81,10 @@ fn og_inputs(tpl: str) throws -> Digest {
     files.sort();
     for f in files {
         d.update(f + "\n");
+        if let b: str = built.get(f) {
+            d.update(b);
+            continue;
+        }
         d.update(try fs::read(f) catch _ { continue; });
     }
     d
@@ -171,7 +181,7 @@ fn chars_of(s: str) -> List<char> {
 }
 
 /// Broken internal `href` / `src` targets: missing file or anchor, or an
-/// address that is relative or not canonical (`http::canonical`).
+/// address that is relative or not canonical (`url::canonical`).
 fn check(files: Dict<str, str>, statics: Set<str>) -> List<str> {
     let ids: Dict<str, Set<str>> = Dict::new();
     let refs: Dict<str, List<str>> = Dict::new();
@@ -203,7 +213,7 @@ fn check(files: Dict<str, str>, statics: Set<str>) -> List<str> {
                 if !frag.is_empty() && !ids[out].contains(frag) { bad.push(f"{out}: {href} (no anchor)"); }
                 continue;
             }
-            if let c: str = http::canonical(path) {
+            if let c: str = url::canonical(path) {
                 bad.push(f"{out}: {href} (not canonical; write {c})");
                 continue;
             }
@@ -336,6 +346,11 @@ fn main() throws {
     // Served by `serve`, not files.
     statics.insert("login");
     statics.insert("me");
+    // The kit's files (web/, built in), then static/.
+    for f in kit::files(kit::Mark::Rokstones) {
+        try fs::write(out_root + "/" + f.name, f.data);
+        statics.insert(f.name);
+    }
     for entry in fs::walk("static") {
         let e = try entry.get();
         if !e.is_file() { continue; }
