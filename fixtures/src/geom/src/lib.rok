@@ -1,0 +1,18 @@
+// 2D shapes: area, perimeter and intersection tests.
+
+/// A shape in the plane.
+pub enum Shape {
+    Rect { w: f64, h: f64 },
+    Circle { r: f64 },
+}
+
+/// The area of `s`.
+pub fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Rect { w, h } => w * h,
+        Shape::Circle { r } => 3.14159 * r * r,
+    }
+}
+
+/// Whether two shapes placed at the origin overlap.
+pub fn intersects(a: Shape, b: Shape) -> bool { true }

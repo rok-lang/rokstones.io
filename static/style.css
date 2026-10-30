@@ -21,7 +21,8 @@ button{font:inherit}
 @media (hover:none){.search .kbd{display:none}}
 .hdr .nav{margin-left:auto;flex-wrap:nowrap}
 .hdr .nav a{white-space:nowrap}
-.nav a[aria-current]{color:var(--ink);font-weight:500}
+/* the current section, as on rok-lang.org and the docs */
+.nav a[aria-current]{color:var(--ink);background:var(--bg-2);font-weight:500}
 .ib:hover{color:var(--ink)}
 .login{display:inline-block;white-space:nowrap}
 .hdr .menu{display:none}
@@ -34,9 +35,11 @@ button{font:inherit}
 .results .n{font-family:var(--mono);font-size:14px;line-height:20px;font-weight:500;color:var(--ink)}
 .results .v{font-family:var(--mono);font-size:13px;line-height:20px;color:var(--ink-3)}
 .results small{grid-column:1/-1;font-size:13px;line-height:18px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.results .vw{display:flex;gap:10px;align-items:baseline}
+.why{font-size:12px;line-height:16px;color:var(--ink-3);white-space:nowrap}
 .results .empty,.results .all{padding:8px 10px;font-size:13px;line-height:18px;color:var(--ink-2)}
 .results .all{border-top:1px solid var(--line);margin-top:4px}
-mark{background:none;color:inherit;text-decoration:underline;text-decoration-color:var(--acc);text-underline-offset:3px}
+mark{background:none;color:var(--ink);font-weight:600;text-decoration:underline;text-decoration-color:var(--acc);text-underline-offset:3px}
 
 /* stone rows */
 .rows{list-style:none;margin:0;padding:0}
@@ -79,7 +82,7 @@ mark{background:none;color:inherit;text-decoration:underline;text-decoration-col
 .side-notes{display:flex;flex-direction:column;gap:28px;padding-top:6px}
 .side-notes section{display:flex;flex-direction:column;gap:8px}
 .side-notes p{font-size:14px;line-height:20px;color:var(--ink-2)}
-pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);font-size:13px;line-height:20px;padding:10px 12px;overflow-x:auto}
+pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);font-size:14px;line-height:22px;padding:10px 12px;overflow-x:auto}
 .empty{color:var(--ink-2);padding:14px 0;border-top:1px solid var(--line)}
 
 /* browse */
@@ -98,10 +101,8 @@ pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);fo
 .name-line .ver{font-family:var(--mono);font-size:20px;line-height:28px;color:var(--ink-3)}
 .name-line .ver.gone{text-decoration:line-through}
 .stone-head .t-lead{max-width:40em}
-.facts{display:flex;flex-wrap:wrap;align-self:flex-start;list-style:none;margin:0;padding:0;font-family:var(--mono);font-size:13px;line-height:18px;color:var(--ink-2);border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
-.facts li{padding:8px 14px;border-right:1px solid var(--line)}
-.facts li:last-child{border-right:0}
-.facts .bad{color:var(--acc)}
+.stone-head .sum{display:none;color:var(--ink-3)}
+.sum span{white-space:nowrap}
 .stone-head .callout{max-width:720px}
 /* the line sits outside the faded tabs */
 .tabs-line{margin-top:10px;border-bottom:1px solid var(--line)}
@@ -128,7 +129,11 @@ html:not(.js) .itabs{display:none}
 html.js .ipanel:not(.on){display:none}
 html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .ipanel{position:relative}
-.ipanel pre{font-size:13px;line-height:20px;padding:10px 76px 10px 12px;overflow-x:auto;margin:0}
+.ipanel pre,.iuse pre{font-size:14px;line-height:22px;padding:9px 76px 9px 12px;overflow-x:auto;margin:0}
+.iuse{position:relative;border-top:1px solid var(--line)}
+.iuse .t-small{padding:8px 12px 0;color:var(--ink-3)}
+.iuse pre{padding-top:2px}
+.iuse .copy{position:absolute;bottom:7px;right:6px}
 .ipanel .p{color:var(--acc);-webkit-user-select:none;user-select:none}
 .ipanel .copy{position:absolute;top:6px;right:6px}
 .vers ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
@@ -137,11 +142,56 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .vers .dot.off{background:var(--line-2)}
 .vers .v{font-family:var(--mono)}
 .vers .tag{margin-left:0}
-.vers .c{margin-left:auto;font-family:var(--mono);font-size:13px}
+.vers .c{margin-left:auto;font-size:13px;line-height:18px;color:var(--ink-3)}
+.vers>.t-small{color:var(--ink-3)}
 .v{font-family:var(--mono);font-weight:500}
 .table-wrap{overflow-x:auto}
 .tbl code{font-size:13px}
 .tbl tr:hover td{background:none}
+
+/* API tab: modules, items, members; the Symbols list */
+.api{display:flex;flex-direction:column;gap:40px;min-width:0}
+.api-mod{display:flex;flex-direction:column;gap:12px;min-width:0}
+.api-mod>.md,.api-item>.md{max-width:760px}
+.api-path{font-size:20px;line-height:28px;letter-spacing:-0.01em;font-weight:500;padding-bottom:8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.api-path code{font-weight:500}
+.api-mod>.t-label{margin-top:12px;color:var(--ink-2)}
+.api-item{padding-top:14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px;min-width:0;scroll-margin-top:16px}
+.api-mod>.t-label+.api-item{border-top:0;padding-top:0}
+.api-item h4{margin:0;font-family:var(--mono);font-size:16px;line-height:26px;font-weight:500;overflow-wrap:anywhere}
+.api-item h4 a{color:var(--ink)}
+pre.sig,.members pre,.uses code{font-size:14px;line-height:22px}
+pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}
+/* signatures break only between the pieces apidoc.rok marks, and
+   continue indented */
+:is(pre.sig,.members>li>pre) code{display:block;padding-left:4ch;text-indent:-4ch}
+.nw{white-space:nowrap}
+.members{list-style:none;margin:0;padding:0}
+.members>li{padding:10px 0;border-top:1px solid var(--line);scroll-margin-top:16px}
+.members>li:first-child{border-top:0;padding-top:0}
+.members>li>pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}
+.members .md{margin-top:6px;color:var(--ink-2)}
+.members>li:target,.api-item:target>h4{background:var(--acc-bg)}
+.impls{font-size:14px;line-height:20px;color:var(--ink-2)}
+.impls summary{cursor:pointer;padding:2px 0}
+.impls ul,.uses{list-style:none;margin:0;padding:0}
+.impls ul{margin-top:6px}
+.impls li{padding:3px 0}
+.uses{display:flex;flex-direction:column;gap:4px}
+.api .k{color:var(--k)}.api .t{color:var(--t)}.api .s{color:var(--s)}.api .n{color:var(--n)}.api .c{color:var(--c)}.api .a{color:var(--n)}
+.api-side{position:sticky;top:0;max-height:100vh;overflow-y:auto;box-sizing:border-box;align-self:start}
+.syms{display:flex;flex-direction:column;gap:2px;font-size:14px;line-height:20px;min-width:0}
+.syms ul{list-style:none;margin:0 0 10px;padding:0}
+.syms a{display:flex;gap:8px;align-items:baseline;padding:3px 0;color:var(--ink-2);min-width:0}
+.syms a:hover{color:var(--ink);text-decoration:none}
+.syms a.sm{color:var(--ink);font-weight:500;padding-top:6px}
+.syms a.sm code{font-size:13px;overflow-wrap:anywhere}
+.syms li a{font-family:var(--mono);font-size:13px;overflow-wrap:anywhere}
+.syms .kd{flex:none;width:6ch;color:var(--ink-3);font-size:12px}
+.t-label .ct,.syms-m .ct{font-family:var(--mono);font-weight:400;color:var(--ink-3);font-size:12px;margin-left:4px}
+.syms-m{display:none;border:1px solid var(--line);border-radius:6px;padding:0 12px}
+.syms-m summary{cursor:pointer;padding:10px 0;font-size:14px;line-height:20px;font-weight:500}
+.syms-m .syms{padding-bottom:8px}
 
 /* copy button, code block bar (search.js) */
 .copy{font-size:13px;line-height:18px;padding:3px 9px;border:1px solid var(--line-2);border-radius:6px;background:var(--panel);color:var(--ink-2);cursor:pointer}
@@ -157,6 +207,10 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .md h2{font-size:30px;line-height:38px;letter-spacing:-0.018em;font-weight:600;margin-top:24px;text-wrap:balance}
 .md h3{font-size:20px;line-height:28px;letter-spacing:-0.01em;font-weight:600;margin-top:12px}
 .md h4{font-size:16px;line-height:26px;font-weight:600;margin-top:8px}
+/* readmes sit under the stone's name: their headings start a step lower */
+.readme h2{font-size:20px;line-height:28px;letter-spacing:-0.01em}
+.readme h3{font-size:16px;line-height:26px;letter-spacing:0}
+.readme h4{font-size:14px;line-height:20px}
 .md p,.md li{text-wrap:pretty}
 .md ul,.md ol{padding-left:24px;display:flex;flex-direction:column;gap:6px}
 .md li>ul,.md li>ol{margin-top:6px}
@@ -220,6 +274,9 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
   .meta{border-left:0;border-top:1px solid var(--line);padding:28px 0 56px}
   .inst-head{display:block;max-width:560px}
   .inst-side{display:none!important}
+  .stone-head .sum{display:block}
+  .api-side{display:none}
+  .syms-m{display:block}
 }
 @media (max-width:720px){
   .frame{padding-left:16px;padding-right:16px}
@@ -230,7 +287,7 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
   .hdr .menu{display:flex}
   .hdr .nav{order:6;flex:1 1 100%;margin:0;display:none;flex-direction:column;gap:2px;padding:4px 0}
   .hdr.open .nav{display:flex}
-  .hdr .nav a{padding:8px 0}
+  .hdr .nav a{padding:8px 10px}
   .intro{padding-top:36px;padding-bottom:28px}
   .intro .t-h1,.doc .t-h1,.lost .t-h1{font-size:30px;line-height:38px;letter-spacing:-0.018em}
   .t-lead{font-size:16px;line-height:26px}
@@ -244,10 +301,9 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
   .gl-box .gl{width:32px;height:32px}
   .name-line h1{font-size:30px;line-height:38px;letter-spacing:-0.018em}
   .name-line .ver{font-size:16px;line-height:26px}
-  .facts{border:0;border-radius:0;background:none;gap:2px 16px}
-  .facts li{padding:0;border:0}
   .tabs{gap:18px}
-  .md h2{font-size:20px;line-height:28px;letter-spacing:-0.01em}
+  .md h2,.readme h1{font-size:20px;line-height:28px;letter-spacing:-0.01em}
+  .readme h2{font-size:16px;line-height:26px;letter-spacing:0}
   .md .anchor{display:none}
 }
 @media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}

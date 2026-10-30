@@ -5,6 +5,7 @@ use pkg::Site;
 use markdown::{Options, esc};
 use pkg::stones;
 use pkg::stones::{Stone, Version};
+use pkg::apidoc;
 use web::chrome;
 
 /// The address of output file `out`, root-relative and canonical: no
@@ -23,7 +24,7 @@ pub fn dir_of(p: str) -> str {
 
 pub fn stone_out(name: str) -> str { f"stones/{name}.html" }
 
-/// A stone's tab page: `versions`, `dependencies` or `dependents`.
+/// A stone's tab page: `api`, `versions`, `dependencies` or `dependents`.
 pub fn tab_out(name: str, tab: str) -> str { f"stones/{name}/{tab}.html" }
 
 /// Markdown options: `link` for hrefs, ```rok / ```rokon highlighted.
@@ -37,7 +38,31 @@ fn code_html(lang: str, body: str) -> (str | none) {
 
 fn short(rev: str) -> str { if rev.len() > 8 { rev[:8] } else { rev } }
 
-fn plural(n: usize, one: str, many: str) -> str { if n == 1 { f"1 {one}" } else { f"{n} {many}" } }
+fn plural(n: usize, one: str, many: str) -> str { if n == 1 { f"1 {one}" } else { f"{grouped(n)} {many}" } }
+
+/// `n` with thousands separators: `4812` -> `4,812`.
+fn grouped(n: usize) -> str {
+    let d = f"{n}";
+    let out = StrBuf::new();
+    let k = 0usize;
+    for c in d.chars() {
+        if k > 0 && (d.len() - k) % 3 == 0 { out.push(','); }
+        out.push(c);
+        k += 1;
+    }
+    out.to_str()
+}
+
+/// A byte count in KiB / MiB, one decimal below 100.
+fn size(b: i64) -> str {
+    let one = |x: i64, unit: str| {
+        // x is tenths
+        if x >= 1000i64 { f"{x / 10i64} {unit}" } else { f"{x / 10i64}.{x % 10i64} {unit}" }
+    };
+    if b < 1024i64 { return f"{b} bytes"; }
+    if b < 1048576i64 { return one((b * 10i64 + 512i64) / 1024i64, "KiB"); }
+    one((b * 10i64 + 524288i64) / 1048576i64, "MiB")
+}
 
 /// `s` cut to `n` characters, with an ellipsis if it was longer.
 fn clip(s: str, n: usize) -> str {
@@ -244,7 +269,7 @@ pub fn landing(site: Site, all: List<Stone>) -> str {
 <aside class=\"side-notes\">
 <section><h2 class=\"t-h3\">Using a stone</h2>
 <p>Run this in a package directory, then <code class=\"ic\">use {esc(example)}::..;</code> in your code.</p>
-<pre class=\"cmd\"><code>rok add {esc(example)}</code></pre></section>
+<div class=\"inst\"><div class=\"ipanel on\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>rok add {esc(example)}</code></pre></div></div></section>
 <section><h2 class=\"t-h3\">Publishing</h2>
 <p>A version is one line in the <a href=\"{esc(site.index_repo)}\">index repository</a> naming a commit of the stone's own repository. Until publishing opens to everyone, send that line as a pull request.</p>
 <p><a href=\"/publishing#publishing\">How publishing works</a></p></section>
@@ -301,11 +326,11 @@ fn commit_link(v: Version) -> str {
 
 fn stone_head(s: Stone, tab: str) -> str {
     let l = s.latest;
-    let facts = StrBuf::new();
-    if !s.date.is_empty() { facts.push_str(f"<li>updated <time datetime=\"{esc(s.date)}\">{esc(s.date)}</time></li>"); }
-    if !l.license.is_empty() { facts.push_str(f"<li>{esc(l.license)}</li>"); }
-    facts.push_str(f"<li>{plural(count_deps(l, "normal"), "dependency", "dependencies")}</li>");
-    if l.yanked { facts.push_str("<li class=\"bad\">yanked</li>"); }
+    // One plain line for narrow screens, where the side panel comes last.
+    let sum: List<str> = List::new();
+    if !l.date.is_empty() { sum.push(f"published <time datetime=\"{esc(l.date)}\">{esc(l.date)}</time>"); }
+    if !l.license.is_empty() { sum.push(esc(l.license)); }
+    sum.push(plural(count_deps(l, "normal"), "dependency", "dependencies"));
     let about = if s.desc.is_empty() { "" } else { f"<p class=\"t-lead\">{esc(s.desc)}</p>" };
     let notice = if l.yanked {
         "<p class=\"callout help\"><span class=\"lab\">yanked</span><span>Every version is yanked. Projects that pinned one in <code class=\"ic\">rok.lock</code> keep building; new ones will not resolve this stone.</span></p>"
@@ -322,6 +347,7 @@ fn stone_head(s: Stone, tab: str) -> str {
         }
     };
     tabs.push_str(t("readme", "Readme", url(stone_out(s.name)), ""));
+    tabs.push_str(t("api", "API", url(tab_out(s.name, "api")), ""));
     tabs.push_str(t("versions", "Versions", url(tab_out(s.name, "versions")), f"{s.versions.len()}"));
     tabs.push_str(t("dependencies", "Dependencies", url(tab_out(s.name, "dependencies")), f"{l.deps.len()}"));
     tabs.push_str(t("dependents", "Dependents", url(tab_out(s.name, "dependents")), f"{s.rdeps.len()}"));
@@ -330,7 +356,7 @@ fn stone_head(s: Stone, tab: str) -> str {
     f"<div class=\"frame stone-head\">
 <nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/stones\">stones</a> / {if tab == "readme" { esc(s.name) } else { f"<a href=\"{esc(url(stone_out(s.name)))}\">{esc(s.name)}</a> / {tab}" }}</nav>
 <div class=\"title\"><span class=\"gl-box\" style=\"--h:{hue(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.vers)}</span></div>{about}</div></div>
-<ul class=\"facts\">{facts.to_str()}</ul>
+<p class=\"sum t-small\"><span>{sum.join("</span> · <span>")}</span></p>
 {notice}{inst}<div class=\"tabs-line\"><nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav></div>
 </div>
 "
@@ -346,9 +372,11 @@ fn install_box(s: Stone, id: str) -> str {
     let add = if stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
     // As `rok add` writes it into a multi-line rok.rokon.
     let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
+    // From the stone's own API (apidoc::import_line), shown under both tabs.
+    let use_line = if s.import.is_empty() { "" } else { f"<div class=\"iuse\"><p class=\"t-small\">Then in your code</p><pre><code class=\"language-rok\">{rok_syntax::highlight_rok(s.import)}</code></pre></div>" };
     f"<div class=\"inst\">
 <div class=\"itabs\" role=\"tablist\" aria-label=\"Install with\"><button type=\"button\" role=\"tab\" id=\"{id}t-add\" aria-controls=\"{id}p-add\" aria-selected=\"true\">rok add</button><button type=\"button\" role=\"tab\" id=\"{id}t-rokon\" aria-controls=\"{id}p-rokon\" aria-selected=\"false\" tabindex=\"-1\">rok.rokon</button></div>
-<div class=\"ipanel on\" role=\"tabpanel\" id=\"{id}p-add\" aria-labelledby=\"{id}t-add\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>{esc(add)}</code></pre></div>
+<div class=\"ipanel on\" role=\"tabpanel\" id=\"{id}p-add\" aria-labelledby=\"{id}t-add\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>{esc(add)}</code></pre></div>{use_line}
 <div class=\"ipanel\" role=\"tabpanel\" id=\"{id}p-rokon\" aria-labelledby=\"{id}t-rokon\"><pre><code class=\"language-rokon\">{rok_syntax::highlight_rokon(manifest)}</code></pre></div>
 </div>"
 }
@@ -358,7 +386,15 @@ fn side(site: Site, s: Stone) -> str {
     let repo = stones::web_of(l.url);
     let shown = esc(l.url.replace("https://", "").strip_suffix(".git") ?? l.url.replace("https://", "")).replace("/", "/<wbr>");
     let repo_html = if repo.is_empty() { f"<code>{shown}</code>" } else { f"<a href=\"{esc(repo)}\">{shown}</a>" };
-    let lic = if l.license.is_empty() { "" } else { f"<dt>License</dt><dd>{esc(l.license)}</dd>" };
+    let kv = StrBuf::new();
+    if !l.date.is_empty() { kv.push_str(f"<dt>Published</dt><dd><time datetime=\"{esc(l.date)}\">{esc(l.date)}</time></dd>"); }
+    if !l.license.is_empty() { kv.push_str(f"<dt>License</dt><dd>{esc(l.license)}</dd>"); }
+    let nd = count_deps(l, "normal");
+    kv.push_str(f"<dt>Dependencies</dt><dd>{if nd == 0 { "None" } else { f"<a href=\"{esc(url(tab_out(s.name, "dependencies")))}\">{nd}</a>" }}</dd>");
+    if let f: stones::Facts = s.facts {
+        kv.push_str(f"<dt>Size</dt><dd>{size(f.bytes)} in {plural(f.files, "file", "files")}</dd>");
+        if f.rok_files > 0 { kv.push_str(f"<dt>Rok code</dt><dd title=\"Lines that are not blank, in .rok files\">{plural(f.rok_lines, "line", "lines")} in {plural(f.rok_files, "file", "files")}</dd>"); }
+    }
     let vs = sorted_versions(s);
     let vb = StrBuf::new();
     let k = 0usize;
@@ -367,15 +403,24 @@ fn side(site: Site, s: Stone) -> str {
         k += 1;
         let mark = if v.vers == l.vers && !v.yanked { "<span class=\"dot\" title=\"latest\"></span>" } else { "<span class=\"dot off\"></span>" };
         let tag = if v.yanked { "<span class=\"tag\">yanked</span>" } else if stones::is_pre(v.vers) { "<span class=\"tag\">pre-release</span>" } else { "" };
-        vb.push_str(f"<li{if v.yanked { " class=\"yanked\"" } else { "" }}>{mark}<span class=\"v\">{esc(v.vers)}</span>{tag}<span class=\"c\">{commit_link(v)}</span></li>");
+        let when = if v.date.is_empty() { "" } else { f"<time class=\"c\" datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
+        vb.push_str(f"<li{if v.yanked { " class=\"yanked\"" } else { "" }}>{mark}<span class=\"v\">{esc(v.vers)}</span>{tag}{when}</li>");
     }
     let more = if s.versions.len() > 5 { f"<a href=\"{esc(url(tab_out(s.name, "versions")))}\" class=\"t-ui\">All {s.versions.len()} versions</a>" } else { "" };
     f"<aside class=\"meta\" aria-label=\"Stone details\">
 <section class=\"inst-side\"><h2 class=\"t-label\">Install</h2>{install_box(s, "i")}</section>
-<dl class=\"kv\"><dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd class=\"mono\">{commit_link(l)}</dd><dt>Tree hash</dt><dd class=\"mono\"><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{lic}<dt>Index file</dt><dd class=\"mono\"><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\">{esc(s.file)}</a></dd></dl>
-<section class=\"vers\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{more}</section>
+<dl class=\"kv\">{kv.to_str()}<dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd class=\"mono\">{commit_link(l)}</dd><dt>Tree hash</dt><dd class=\"mono\"><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd><dt>Index file</dt><dd class=\"mono\"><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\">{esc(s.file)}</a></dd></dl>
+<section class=\"vers\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{dates_note(s)}{more}</section>
 </aside>
 "
+}
+
+/// What the version dates are, under a list that shows them.
+fn dates_note(s: Stone) -> str {
+    for v in s.versions {
+        if !v.date.is_empty() { return "<p class=\"t-small\">Dates: when the version was added to the index.</p>"; }
+    }
+    ""
 }
 
 fn stone_frame(site: Site, s: Stone, tab: str, main: str) -> str {
@@ -398,6 +443,33 @@ pub fn stone_page(site: Site, s: Stone) -> str {
     stone_frame(site, s, "readme", readme)
 }
 
+/// The API tab: the latest version's public items, with a Symbols list
+/// in place of the side panel's details.
+pub fn api_page(site: Site, s: Stone) -> str {
+    let l = s.latest;
+    if s.api.is_empty() {
+        let why = if s.api_none == "lib" { "this stone has no <code class=\"ic\">src/lib.rok</code>." } else { "its source could not be read when the site was built. It is tried again on the next build." };
+        return stone_frame(site, s, "api", f"<p class=\"empty\">No API docs: {why}</p>\n");
+    }
+    let link = |h: str| stones::repo_link(l.url, l.rev, h);
+    let syms = apidoc::symbols(s.api);
+    let n = apidoc::count(s.api);
+    let main = f"<p class=\"t-ui muted\">The public items of {esc(s.name)} {esc(l.vers)} and their doc comments, read from its source at {commit_link(l)}. Signatures are shown as written.</p>
+<details class=\"syms-m\"><summary>Symbols <span class=\"ct\">{n}</span></summary><nav class=\"syms\" aria-label=\"Symbols\">{syms}</nav></details>
+<div class=\"api\">{apidoc::body(s.api, link)}</div>
+";
+    let side = f"<aside class=\"meta api-side\" aria-label=\"Symbols\">
+<section class=\"inst-side\"><h2 class=\"t-label\">Install</h2>{install_box(s, "i")}</section>
+<section class=\"syms-w\"><h2 class=\"t-label\">Symbols <span class=\"ct\">{n}</span></h2><nav class=\"syms\" aria-label=\"Symbols\">{syms}</nav></section>
+</aside>
+";
+    f"{stone_head(s, "api")}<div class=\"frame stone-body\">
+<div class=\"main\">
+{main}</div>
+{side}</div>
+"
+}
+
 pub fn versions_page(site: Site, s: Stone) -> str {
     let b = StrBuf::new();
     for v in sorted_versions(s) {
@@ -405,11 +477,12 @@ pub fn versions_page(site: Site, s: Stone) -> str {
         if v.vers == s.latest.vers && !v.yanked { tags.push_str("<span class=\"tag acc\">latest</span>"); }
         if v.yanked { tags.push_str("<span class=\"tag\">yanked</span>"); }
         if stones::is_pre(v.vers) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
-        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><span class=\"v\">{esc(v.vers)}</span>{tags.to_str()}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.cksum)}\">{short(v.cksum)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
+        let when = if v.date.is_empty() { "<span class=\"muted\">unknown</span>" } else { f"<time datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
+        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><span class=\"v\">{esc(v.vers)}</span>{tags.to_str()}</td><td>{when}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.cksum)}\">{short(v.cksum)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
     }
     let body = f"<h2 class=\"t-h3\">{plural(s.versions.len(), "version", "versions")}</h2>
-<p class=\"t-ui muted\">Newest first. A yanked version stays in the index for the projects that pinned it; new resolves skip it.</p>
-<div class=\"table-wrap\"><table class=\"tbl\"><thead><tr><th scope=\"col\">Version</th><th scope=\"col\">Commit</th><th scope=\"col\">Tree hash</th><th scope=\"col\">License</th></tr></thead><tbody>{b.to_str()}</tbody></table></div>
+<p class=\"t-ui muted\">Newest first. Published is the date the version's line was added to the index. A yanked version stays in the index for the projects that pinned it; new resolves skip it.</p>
+<div class=\"table-wrap\"><table class=\"tbl\"><thead><tr><th scope=\"col\">Version</th><th scope=\"col\">Published</th><th scope=\"col\">Commit</th><th scope=\"col\">Tree hash</th><th scope=\"col\">License</th></tr></thead><tbody>{b.to_str()}</tbody></table></div>
 ";
     stone_frame(site, s, "versions", body)
 }

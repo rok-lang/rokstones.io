@@ -8,6 +8,7 @@ use rok::std::rokon::Value;
 use rok::std::process::Command;
 use rok::core::cmp::Ordering;
 use pkg::layout;
+use pkg::apidoc;
 
 pub struct Req {
     pub name: str;
@@ -30,6 +31,19 @@ pub struct Version {
     pub license: str;
     /// Feature name and what it enables, in manifest order.
     pub features: List<(str, List<str>)>;
+    /// When its line was added to the index (`YYYY-MM-DD`, commit date);
+    /// `""` when the index has no git history.
+    pub date: str = "";
+}
+
+/// What a commit's tree holds, counted at build time.
+pub struct Facts {
+    /// Every file (blob) in the tree, and their total size in bytes.
+    pub files: usize;
+    pub bytes: i64;
+    /// `.rok` files and their lines that are not blank.
+    pub rok_files: usize;
+    pub rok_lines: usize;
 }
 
 pub struct RDep {
@@ -55,6 +69,15 @@ pub struct Stone {
     pub desc: str;
     /// Stones whose latest version depends on this one (normal deps).
     pub rdeps: List<RDep>;
+    /// The latest version's tree; none when it could not be read.
+    pub facts: Facts | none;
+    /// Its public modules (apidoc.rok); empty when unavailable.
+    pub api: List<apidoc::Module>;
+    /// Why `api` is empty: `"tree"` (not fetched), `"lib"` (no
+    /// src/lib.rok); `""` when it is not.
+    pub api_none: str;
+    /// `use ..;` for the install box (apidoc::import_line); `""`: none.
+    pub import: str;
 }
 
 pub struct Index {
@@ -69,6 +92,8 @@ pub struct Readmes {
     pub cache: str;
     /// Directory of `<name>.md` used instead of git (`--demo`); `""`: none.
     pub fixed: str;
+    /// Directory of `<name>/` source trees used instead of git (`--demo`).
+    pub fixed_src: str = "";
     /// Never run `git fetch`.
     pub offline: bool;
 }
@@ -354,9 +379,116 @@ fn readme_text(r: Readmes, name: str, url: str, rev: str) -> str {
     text
 }
 
+/// A commit's tree: in the git cache, or a fixture directory (`--demo`).
+struct Tree {
+    db: str;
+    rev: str;
+    /// Fixture directory; `""` for git.
+    dir: str;
+}
+
+/// The tree of `url` at `rev`; none offline when the cache lacks it, or
+/// when it cannot be fetched.
+fn tree_of_stone(r: Readmes, name: str, url: str, rev: str) -> Tree | none {
+    if !r.fixed.is_empty() {
+        let d = f"{r.fixed_src}/{name}";
+        return if !r.fixed_src.is_empty() && fs::exists(d) { Tree { db: "", rev: rev, dir: d } } else { none };
+    }
+    let db = r.cache + "/git";
+    if r.offline || !fetchable(url) {
+        if !fs::exists(db) || git(["-C", db, "cat-file", "-e", rev + "^{commit}"]) is none { return none; }
+        return Tree { db: db, rev: rev, dir: "" };
+    }
+    match fetch_commit(r.cache, url, rev) {
+        d: str => Tree { db: d, rev: rev, dir: "" },
+        none => none,
+    }
+}
+
+/// Every file of `t` and its size, sorted by path.
+fn tree_files(t: Tree) -> List<(str, i64)> {
+    let out: List<(str, i64)> = List::new();
+    if !t.dir.is_empty() {
+        for entry in fs::walk(t.dir) {
+            let e = try entry.get() catch _ { continue; };
+            if !e.is_file() { continue; }
+            let size = try fs::metadata(e.path()) catch _ { continue; };
+            out.push((e.path().as_str()[t.dir.len() + 1:], size.len() as i64));
+        }
+        out.sort_by(|a: (str, i64), b: (str, i64)| a.0.cmp(b.0));
+        return out;
+    }
+    // `<mode> blob <sha> <size>\t<path>`; submodules are commits, not blobs.
+    for l in (git(["-C", t.db, "ls-tree", "-r", "-l", "-z", t.rev]) ?? "").split("\u{0}") {
+        let (head, path) = l.split_once("\t") ?? ("", "");
+        let ws: List<str> = List::new();
+        for w in head.split(" ") {
+            if !w.is_empty() { ws.push(w); }
+        }
+        if ws.len() != 4 || ws[1] != "blob" { continue; }
+        out.push((path, try ws[3].parse::<i64>() catch _ { 0i64 }));
+    }
+    out
+}
+
+/// File `path` of `t`, as text.
+fn tree_read(t: Tree, path: str) -> str | none {
+    if !t.dir.is_empty() {
+        let p = t.dir + "/" + path;
+        return if fs::exists(p) { try fs::read_to_str(p) catch _ { none } } else { none };
+    }
+    git(["-C", t.db, "show", f"{t.rev}:{path}"])
+}
+
+fn nonblank(text: str) -> usize {
+    let n = 0usize;
+    for l in text.split("\n") {
+        if !l.trim().is_empty() { n += 1; }
+    }
+    n
+}
+
+fn facts_of(t: Tree, files: List<(str, i64)>) -> Facts {
+    let f = Facts { files: files.len(), bytes: 0i64, rok_files: 0usize, rok_lines: 0usize };
+    for (p, size) in files {
+        f.bytes += size;
+        if p.ends_with(".rok") { f.rok_files += 1; }
+    }
+    if !t.dir.is_empty() {
+        for (p, _size) in files {
+            if p.ends_with(".rok") { f.rok_lines += nonblank(tree_read(t, p) ?? ""); }
+        }
+        return f;
+    }
+    // `<rev>:<path>:<count>` per file with a non-blank line.
+    for l in (git(["-C", t.db, "grep", "-I", "-c", "-e", "[^[:space:]]", t.rev, "--", "*.rok"]) ?? "").split("\n") {
+        if let k: usize = l.rfind(":") { f.rok_lines += try l[k + 1:].parse::<usize>() catch _ { 0usize }; }
+    }
+    f
+}
+
+/// The date each version's line was first added to the index `dir`
+/// (commit date, `YYYY-MM-DD`), by `name@vers`; empty without history.
+pub fn version_dates(dir: str) -> Dict<str, str> {
+    let out: Dict<str, str> = Dict::new();
+    let log = git(["-C", dir, "log", "--reverse", "--relative", "--no-renames", "--no-color", "--no-ext-diff", "-p", "-U0", "--format==%cs"]) ?? "";
+    // `=<date>` heads each commit; no line of a patch starts with `=`.
+    let cur = "";
+    for l in log.split("\n") {
+        if l.starts_with("=") {
+            cur = l[1:];
+        } else if l.starts_with("+Stone {") {
+            let (name, v) = try parse_line(l[1:]) catch _ { continue; };
+            let key = name + "@" + v.vers;
+            if !out.contains_key(key) { out.insert(key, cur); }
+        }
+    }
+    out
+}
+
 /// Where a README's relative link points: the file in the source repo
 /// at the commit (GitHub / GitLab style), else the repo itself.
-fn repo_link(url: str, rev: str, h: str) -> str {
+pub fn repo_link(url: str, rev: str, h: str) -> str {
     if h.starts_with("#") || h.starts_with("https://") || h.starts_with("http://") || h.starts_with("mailto:") { return h; }
     // Any other scheme (`javascript:` ..) is dropped.
     if h.contains(":") { return "#"; }
@@ -465,11 +597,26 @@ pub fn load(dir: str, r: Readmes) -> Index {
     }
 
     let dates = file_dates(dir);
+    let published = version_dates(dir);
+    for k in names {
+        let vs = by_name[k];
+        for i in 0..vs.len() { vs[i].date = published.get(k + "@" + vs[i].vers) ?? ""; }
+        latest[k].date = published.get(k + "@" + latest[k].vers) ?? "";
+    }
     let stones: List<Stone> = List::new();
     for k in names {
         let l = latest[k];
         let html = "";
         let text = readme_text(r, k, l.url, l.rev);
+        let facts: Facts | none = none;
+        let api: List<apidoc::Module> = List::new();
+        let api_none = "tree";
+        if let t: Tree = tree_of_stone(r, k, l.url, l.rev) {
+            let files = tree_files(t);
+            facts = facts_of(t, files);
+            api = apidoc::collect(k.replace("-", "_"), |p| tree_read(t, p));
+            api_none = if api.is_empty() { "lib" } else { "" };
+        }
         if !text.is_empty() {
             let doc = markdown::render_untrusted(text, layout::md(|h| repo_link(l.url, l.rev, h)));
             html = doc.html;
@@ -485,6 +632,10 @@ pub fn load(dir: str, r: Readmes) -> Index {
             readme: html,
             desc: if l.description.is_empty() { first_para(html, 140) } else { l.description },
             rdeps: rdeps.get(k) ?? List::new(),
+            facts: facts,
+            api: api,
+            api_none: api_none,
+            import: apidoc::import_line(k.replace("-", "_"), api, text),
         });
     }
     Index { stones: stones, errors: errors }

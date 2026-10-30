@@ -1,0 +1,52 @@
+// JSON documents: `parse` reads text into a `Value`, `to_string` writes
+// one back. `#[derive(Json)]` maps structs and enums to and from `Value`.
+
+pub mod read;
+
+pub use read::{Tokenizer, Event};
+
+/// A JSON value. Objects keep insertion order.
+pub enum Value {
+    Null,
+    Bool(bool),
+    /// An integer without a fraction or exponent.
+    Int(i64),
+    Float(f64),
+    Str(str),
+    Array(List<Value>),
+    Object(OrderedDict<str, Value>),
+}
+
+impl Value {
+    /// The member `k` of an object; `none` for other values.
+    pub fn get(self, k: str) -> Value | none {
+        if let Value::Object(m) = self { return m.get(k); }
+        none
+    }
+
+    /// Compact JSON text.
+    pub fn to_string(self) -> str { write(self) }
+}
+
+/// A read or decode error at `line:col` (1-based).
+pub struct JsonError {
+    pub msg: str;
+    pub line: usize;
+    pub col: usize;
+}
+
+/// A rok value as JSON.
+pub trait ToJson {
+    fn to_json(self) -> Value;
+}
+
+/// Read one document.
+pub fn parse(s: str) throws (JsonError) -> Value { try read::document(s) }
+
+/// `x` as compact JSON.
+pub fn to_string<T: ToJson>(x: T) -> str { x.to_json().to_string() }
+
+/// Nesting deeper than this is an error.
+pub const MAX_DEPTH: usize = 128;
+
+fn write(v: Value) -> str { "" }

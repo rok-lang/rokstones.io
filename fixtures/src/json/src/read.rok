@@ -1,0 +1,29 @@
+// Streaming reads: a `Tokenizer` turns text into `Event`s without
+// building a tree.
+
+use pkg::{Value, JsonError};
+
+/// One step of a document.
+pub enum Event {
+    StartObject,
+    EndObject,
+    StartArray,
+    EndArray,
+    Key(str),
+    Scalar(Value),
+}
+
+/// Reads events from text.
+pub struct Tokenizer {
+    pub max_depth: usize;
+    src: str;
+}
+
+impl Tokenizer {
+    pub fn new(src: str) -> Tokenizer { Tokenizer { max_depth: 128usize, src: src } }
+
+    /// The next event; `none` at the end of the document.
+    pub fn next(self) throws (JsonError) -> Event | none { none }
+}
+
+pub(pkg) fn document(s: str) throws (JsonError) -> Value { Value::Null }

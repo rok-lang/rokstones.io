@@ -1,0 +1,6 @@
+Package {
+    name: "json",
+    version: "0.5.0",
+    description: "JSON parser and writer",
+    license: "MIT OR Apache-2.0",
+}

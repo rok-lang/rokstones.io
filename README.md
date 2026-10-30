@@ -28,7 +28,7 @@ rok test                  # unit tests
 tests/e2e.sh              # end-to-end test of serve
 ```
 
-`fixtures/` holds a sample index (`--demo`) with more stones and edge cases than the real one, for checking the site without git or network. Stone-page READMEs are fetched by commit into `.cache/` and rendered untrusted (HTML shown as text, non-http(s)/mailto links dropped).
+`fixtures/` holds a sample index (`--demo`) with more stones and edge cases than the real one, plus READMEs and source trees for some of them, for checking the site without git or network. Each stone's latest commit is fetched into `.cache/git`: its README is rendered untrusted (HTML shown as text, non-http(s)/mailto links dropped), its tree is counted for the side panel (files, size, non-blank lines of `.rok`), and its public items become the API tab (`src/apidoc.rok`). Version dates are the commit dates of the index commits that added each version's line.
 
 ## Web kit
 
@@ -99,8 +99,9 @@ Edit `site.rokon` (ROKON). Key fields: `title`, `tagline`, `description`, `index
 | `src/server.rok` | `serve`: settings, `db.rokon`, GitHub login, account page, API, rebuilds |
 | `src/index.rok`  | API entry checks, index commits and pushes |
 | `src/secret.rok` | SHA-256, random bytes, constant-time compare |
-| `src/stones.rok` | Reads the index, semver ordering, dependents, README fetching |
-| `src/layout.rok` | Page frame, home, stone list, publishing guide, stone pages and their tabs |
+| `src/stones.rok` | Reads the index, semver ordering, dependents, version dates, README and source tree fetching |
+| `src/apidoc.rok` | API tab: public items and `///` docs scanned from a stone's sources; the install box's `use` line |
+| `src/layout.rok` | Page frame, home, stone list, publishing guide, stone pages and their tabs (Readme, API, Versions, Dependencies, Dependents) |
 | `tests/`         | `e2e.sh` and the fake GitHub it runs |
 | `pages/publishing.md` | Publishing guide text |
 | `static/`        | `style.css`, `search.js`, `og.png` |
