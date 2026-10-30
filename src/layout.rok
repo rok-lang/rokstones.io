@@ -83,8 +83,11 @@ fn search_box() -> str {
 }
 
 /// `<head>` from the charset to the icons. `url` is the canonical address,
-/// `img` the og:image.
-fn head(site: Site, full: str, desc: str, url: str, img: str) -> str {
+/// `img` the og:image (versioned by main.rok's og_version) and `alt`
+/// its text.
+fn head(site: Site, full: str, desc: str, url: str, img: str, alt: str) -> str {
+    let img = esc(img);
+    let alt = esc(alt);
     f"<meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
 <title>{esc(full)}</title>
@@ -96,8 +99,14 @@ fn head(site: Site, full: str, desc: str, url: str, img: str) -> str {
 <meta property=\"og:title\" content=\"{esc(full)}\">
 <meta property=\"og:description\" content=\"{desc}\">
 <meta property=\"og:url\" content=\"{esc(url)}\">
-<meta property=\"og:image\" content=\"{esc(img)}\">
+<meta property=\"og:image\" content=\"{img}\">
+<meta property=\"og:image:type\" content=\"image/png\">
+<meta property=\"og:image:width\" content=\"{site.og_w}\">
+<meta property=\"og:image:height\" content=\"{site.og_h}\">
+<meta property=\"og:image:alt\" content=\"{alt}\">
 <meta name=\"twitter:card\" content=\"summary_large_image\">
+<meta name=\"twitter:image\" content=\"{img}\">
+<meta name=\"twitter:image:alt\" content=\"{alt}\">
 <meta name=\"theme-color\" content=\"#fbfbfc\" media=\"(prefers-color-scheme: light)\">
 <meta name=\"theme-color\" content=\"#090a0d\" media=\"(prefers-color-scheme: dark)\">
 <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
@@ -138,14 +147,16 @@ fn footer(site: Site) -> str {
 /// `page` with a `<meta name="description">` of its own.
 pub fn page(site: Site, out: str, title: str, body: str) -> str { page_desc(site, out, title, "", body) }
 
-pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: str = "") -> str {
+/// `img` and `alt` are a stone's card; the home card by default. Every
+/// card is drawn at the home card's size (og/render.mjs).
+pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: str = "", alt: str = "") -> str {
     let home = out == "index.html";
     let full = if home { site.title + " - " + site.tagline } else { title + " - " + site.title };
     let desc = esc(if about.is_empty() { site.description } else { clip(about, 160) });
     let canon = site.base_url + url(out);
     // Heading permalinks are aria-hidden, so keep them out of the tab order too.
     let body = body.replace("class=\"anchor\" href=", "class=\"anchor\" tabindex=\"-1\" href=");
-    let ogimg = if img.is_empty() { site.base_url + "/og.png" } else { img };
+    let (ogimg, ogalt) = if img.is_empty() { (site.base_url + "/og.png" + (if site.og.is_empty() { "" } else { "?v=" + site.og }), f"{site.title}: {site.tagline}") } else { (img, alt) };
     let cur = |on: bool| if on { " aria-current=\"page\"" } else { "" };
     let browse = cur(out == "stones/index.html" || out.starts_with("stones/"));
     let publish = cur(out == "publishing.html");
@@ -159,7 +170,7 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
     f"<!doctype html>
 <html lang=\"en\" class=\"rk lt\">
 <head>
-{head(site, full, desc, canon, ogimg)}</head>
+{head(site, full, desc, canon, ogimg, ogalt)}</head>
 <body>
 <a class=\"skip\" href=\"#content\">Skip to content</a>
 <header class=\"hdr\">

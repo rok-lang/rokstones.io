@@ -38,6 +38,7 @@ git -C "$T/index" push -q -u origin HEAD 2>/dev/null
 mkdir -p "$T/site"
 cp -R "$repo/static" "$repo/pages" "$T/site/"
 mkdir -p "$T/site/og"
+cp -R "$repo/og/render.mjs" "$repo/og/home.html" "$repo/og/stone.html" "$repo/og/logo.svg" "$repo/og/fonts" "$T/site/og/"
 sed -e 's|^ *out: .*|    out: "public",|' "$repo/site.rokon" > "$T/site/site.rokon"
 
 "$repo/tests/fake-github/target/debug/fake_github" "127.0.0.1:$gh_port" test-secret &
@@ -128,6 +129,17 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --path-as-is "$base/../site.rokon"
 [ "$code" = 400 ] || [ "$code" = 404 ] || fail "path traversal: $code"
 code=$(curl -s -o /dev/null -w '%{http_code}' --path-as-is "$base/%2e%2e/site.rokon")
 [ "$code" = 404 ] || fail "encoded traversal: $code"
+v=$(sed -n 's|.*property="og:image" content="[^"]*/og.png?v=\([0-9a-f]\{10\}\)".*|\1|p' "$T/site/public/index.html")
+[ -n "$v" ] || fail "no versioned og:image"
+req GET /og.png
+[ "$(header cache-control)" = "public, max-age=3600" ] || fail "bare og.png cache: $(header cache-control)"
+echo "$v" > "$T/site/public/og.png.v"
+req GET "/og.png?v=$v"
+[ "$(header cache-control)" = "public, max-age=31536000, immutable" ] || fail "versioned og.png cache: $(header cache-control)"
+req GET "/og.png?v=0000000000"
+[ "$(header cache-control)" = "public, max-age=3600" ] || fail "stale og.png cache: $(header cache-control)"
+req GET /style.css
+[ "$(header cache-control)" = "no-cache" ] || fail "css cache: $(header cache-control)"
 ok "static files"
 
 # ---- logins ----

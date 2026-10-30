@@ -18,6 +18,8 @@ mod server;
 use rok::std::env;
 use rok::std::fs;
 use rok::std::rokon;
+use rok::core::crypto::HashAlgorithm;
+use rok::core::crypto::sha2::Digest;
 use rok::core::task::time::Instant;
 use layout::dir_of;
 
@@ -39,6 +41,56 @@ pub struct Site {
     /// README cache (git objects and extracted READMEs).
     pub cache: str = ".cache";
     pub out: str = "public";
+    /// The home card's version and pixel size (og_version), set on load.
+    pub og: str = "";
+    pub og_w: i64 = 0i64;
+    pub og_h: i64 = 0i64;
+}
+
+/// site.rokon, with the home card's version and size.
+fn load_site() throws -> Site {
+    let site: Site = try rokon::from_str(try fs::read_to_str("site.rokon"));
+    site.og = og_version(try og_inputs("home.html"), "");
+    let (w, h) = try png_size("static/og.png");
+    site.og_w = w;
+    site.og_h = h;
+    site
+}
+
+/// A running hash of what og/render.mjs draws a card from: itself, the
+/// template, the assets the templates load, and for the home card the
+/// static/og.png it replaces. og_version adds the card's text.
+fn og_inputs(tpl: str) throws -> Digest {
+    let d = Digest::new(HashAlgorithm::Sha256);
+    let files = ["og/render.mjs", "og/" + tpl, "og/logo.svg", "static/rok.css"];
+    if tpl == "home.html" { files.push("static/og.png"); }
+    for entry in fs::walk("og/fonts") {
+        let e = try entry.get();
+        if e.is_file() { files.push(e.path().as_str()); }
+    }
+    files.sort();
+    for f in files {
+        d.update(f + "\n");
+        d.update(try fs::read(f));
+    }
+    d
+}
+
+/// A card's version: the first 10 hex digits of its inputs' SHA-256. It
+/// changes exactly when the rendered card would, so a new card gets a
+/// new URL and link previews refetch it.
+pub fn og_version(inputs: Digest, text: str) -> str {
+    let d = inputs;
+    d.update(text);
+    secret::hex(d.finish()[0:5])
+}
+
+/// Width and height from a PNG's IHDR chunk.
+fn png_size(path: str) throws -> (i64, i64) {
+    let b = try fs::read(path);
+    if b.len() < 24 { throw ValueError { msg: f"{path}: not a PNG" }; }
+    let be = |k: usize| ((b[k] as i64) << 24) | ((b[k + 1] as i64) << 16) | ((b[k + 2] as i64) << 8) | (b[k + 3] as i64);
+    (be(16), be(20))
 }
 
 fn json_str(s: str) -> str {
@@ -165,8 +217,7 @@ fn main() throws {
     let t0 = Instant::now();
     let args = env::args();
     if args.len() == 2 && args[1] == "serve" {
-        let site: Site = try rokon::from_str(try fs::read_to_str("site.rokon"));
-        try server::serve(site);
+        try server::serve(try load_site());
         return;
     }
     let strict = false;
@@ -192,7 +243,7 @@ fn main() throws {
         i += 1;
     }
 
-    let site: Site = try rokon::from_str(try fs::read_to_str("site.rokon"));
+    let site = try load_site();
     let dir = if demo { "fixtures/index" } else if !index_arg.is_empty() { index_arg } else { site.index };
     dir = dir.strip_suffix("/") ?? dir;
     if !fs::exists(dir) {
@@ -206,10 +257,19 @@ fn main() throws {
     let have: Set<str> = Set::new();
     for s in all { have.insert(s.name); }
 
-    // OG card manifest (name, version, description) for og/render.mjs.
-    let mani = "";
-    for s in all { mani = mani + s.name + "\t" + s.latest.vers + "\t" + s.desc.replace("\t", " ").replace("\n", " ") + "\n"; }
-    try fs::write("og/manifest.tsv", mani);
+    // OG cards for og/render.mjs, one per line: card version, name, stone
+    // version, description; the home card has no name.
+    let stone_card = try og_inputs("stone.html");
+    let og_v: Dict<str, str> = Dict::new();
+    let mani = StrBuf::new();
+    mani.push_str(f"{site.og}\t\t\t\n");
+    for s in all {
+        let text = s.name + "\t" + s.latest.vers + "\t" + s.desc.replace("\t", " ").replace("\n", " ");
+        let v = og_version(stone_card, text);
+        og_v.insert(s.name, v);
+        mani.push_str(v + "\t" + text + "\n");
+    }
+    try fs::write("og/manifest.tsv", mani.to_str());
 
     let files: Dict<str, str> = Dict::new();
     let guide = markdown::render(try fs::read_to_str("pages/publishing.md"), layout::md(|h| h));
@@ -220,14 +280,15 @@ fn main() throws {
     for s in all {
         let out = layout::stone_out(s.name);
         let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a Rok stone" } else { s.desc };
-        let og = site.base_url + "/og/" + s.name + ".png";
-        files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s), og));
+        let og = site.base_url + "/og/" + s.name + ".png?v=" + og_v[s.name];
+        let alt = f"{s.name} {s.latest.vers}: {about}";
+        files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s), og, alt));
         let vo = layout::tab_out(s.name, "versions");
-        files.insert(vo, layout::page_desc(site, vo, f"Versions of {s.name}", about, layout::versions_page(site, s), og));
+        files.insert(vo, layout::page_desc(site, vo, f"Versions of {s.name}", about, layout::versions_page(site, s), og, alt));
         let dpo = layout::tab_out(s.name, "dependencies");
-        files.insert(dpo, layout::page_desc(site, dpo, f"Dependencies of {s.name}", about, layout::deps_page(site, s, have), og));
+        files.insert(dpo, layout::page_desc(site, dpo, f"Dependencies of {s.name}", about, layout::deps_page(site, s, have), og, alt));
         let rdo = layout::tab_out(s.name, "dependents");
-        files.insert(rdo, layout::page_desc(site, rdo, f"Dependents of {s.name}", about, layout::dependents_page(site, s), og));
+        files.insert(rdo, layout::page_desc(site, rdo, f"Dependents of {s.name}", about, layout::dependents_page(site, s), og, alt));
     }
 
     // Search index: every stone, its latest version and description.
@@ -268,6 +329,17 @@ fn main() throws {
         try fs::copy(e.path(), out_root + "/" + name);
         statics.insert(name);
     }
+    // Rendered cards outlive the rebuild while still current: each has a
+    // `.v` beside it naming the version render.mjs drew (server.rok).
+    let cards: List<(str, str)> = [("og.png", site.og)];
+    for s in all { cards.push(("og/" + s.name + ".png", og_v[s.name])); }
+    for (card, v) in cards {
+        let from = site.out + "/" + card;
+        if !fs::exists(from + ".v") || (try fs::read_to_str(from + ".v")).trim() != v { continue; }
+        try fs::create_dir_all(dir_of(out_root + "/" + card));
+        try fs::copy(from, out_root + "/" + card);
+        try fs::copy(from + ".v", out_root + "/" + card + ".v");
+    }
 
     let old = site.out + ".old";
     if fs::exists(old) { try fs::remove_dir_all(old); }
@@ -284,6 +356,13 @@ fn main() throws {
     }
     println(f"{dir}: {all.len()} stones ({readme_n} with README), {idx.errors.len()} index errors → {out_root}/ ({files.len()} html), {bad.len()} broken links, {t0.elapsed():?}");
     if strict && (bad.len() > 0 || idx.errors.len() > 0) { env::exit(1); }
+}
+
+#[test]
+fn og_versions() {
+    let d = Digest::new(HashAlgorithm::Sha256);
+    let a = og_version(d, "abc");
+    if a != "ba7816bf8f" || og_version(d, "abc") != a || og_version(d, "abd") == a { panic(a); }
 }
 
 #[test]

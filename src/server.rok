@@ -620,6 +620,16 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     rokon_resp(200, "Yanked", [("name", Value::Str(y.name)), ("vers", Value::Str(y.vers)), ("yanked", Value::Bool(!y.undo))])
 }
 
+/// An OG card asked for by the version render.mjs drew it from (the `.v`
+/// beside it) never changes: cache it for good. Bare, stale or unrendered
+/// card addresses stay short; everything else revalidates.
+pub fn cache_for(path: str, f: str, query: str) -> str {
+    if path != "/og.png" && !(path.starts_with("/og/") && path.ends_with(".png")) { return "no-cache"; }
+    let v = http::form(query).get("v") ?? "";
+    let drawn = try fs::read_to_str(f + ".v") catch _ { "" };
+    if !v.is_empty() && v == drawn.trim() { "public, max-age=31536000, immutable" } else { "public, max-age=3600" }
+}
+
 fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let p = r.path;
     if p.starts_with("/api/") { return api_route(cfg, r); }
@@ -635,7 +645,7 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
         return Resp { status: 301, headers: [http::moved(c, r.query), "Cache-Control: public, max-age=3600"], body: "", file: "" };
     }
     if let f: str = http::page_file(site.out, p) {
-        return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: no-cache"], body: "", file: f };
+        return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: " + cache_for(p, f, r.query)], body: "", file: f };
     }
     message(site, p, 404, "Not found", "No page here.")
 }

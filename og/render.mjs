@@ -1,7 +1,9 @@
 // Render the rokstones.io Open Graph cards (1200x630) with headless Chrome:
 // one home card (<out>/og.png) and one per stone (<out>/og/<name>.png),
-// filled from og/manifest.tsv (name<TAB>version<TAB>description), which the
-// site build writes.
+// filled from og/manifest.tsv (card<TAB>name<TAB>version<TAB>description;
+// the home card has no name), which the site build writes. Each card gets
+// a <png>.v naming the card version it was drawn from: the server caches
+// og.png?v=<that> for good, and rebuilds keep the card while it matches.
 //   node render.mjs [outDir=../public] [manifest=./manifest.tsv]
 import puppeteer from "puppeteer-core";
 import { readFileSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
@@ -33,16 +35,21 @@ const glyph = (name) => {
   return { HUE: h % 360, ROT: (h % 70) - 35, SX: ((80 + (h % 25)) / 100).toFixed(2) };
 };
 
-const cards = [{ out: join(outDir, "og.png"), html: read("home.html") }];
+const cards = [];
 if (existsSync(manifestPath)) {
   const tpl = read("stone.html");
   for (const line of readFileSync(manifestPath, "utf8").split("\n")) {
     if (!line.trim()) continue;
-    const [name, vers, ...rest] = line.split("\t");
+    const [v, name, vers, ...rest] = line.split("\t");
+    if (!name) {
+      cards.push({ out: join(outDir, "og.png"), v, html: read("home.html") });
+      continue;
+    }
     const desc = rest.join("\t") || `${name} ${vers}, a Rok stone`;
-    cards.push({ out: join(outDir, "og", `${name}.png`), html: fill(tpl, { NAME: name, VERS: vers, DESC: desc, ...glyph(name) }) });
+    cards.push({ out: join(outDir, "og", `${name}.png`), v, html: fill(tpl, { NAME: name, VERS: vers, DESC: desc, ...glyph(name) }) });
   }
 }
+if (!cards.some((c) => c.out === join(outDir, "og.png"))) cards.unshift({ out: join(outDir, "og.png"), v: "", html: read("home.html") });
 
 mkdirSync(join(outDir, "og"), { recursive: true });
 const browser = await puppeteer.launch({
@@ -59,6 +66,8 @@ try {
     await page.evaluate(async () => { await document.fonts.ready; });
     await page.screenshot({ path: c.out, clip: { x: 0, y: 0, width: 1200, height: 630 } });
     await page.close();
+    if (c.v) writeFileSync(c.out + ".v", c.v + "\n");
+    else rmSync(c.out + ".v", { force: true });
     console.log("wrote", c.out);
   }
 } finally {
