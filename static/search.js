@@ -25,8 +25,7 @@
     html.classList.toggle("lt", !d);
     if (tb) {
       tb.setAttribute("aria-pressed", d ? "true" : "false");
-      tb.setAttribute("aria-label", d ? "Switch to light theme" : "Switch to dark theme");
-      tb.title = tb.getAttribute("aria-label");
+      tb.title = d ? "Switch to light theme" : "Switch to dark theme";
     }
     const cur = s === "light" || s === "dark" ? s : "system";
     seg.forEach((b) => b.setAttribute("aria-pressed", b.dataset.theme === cur ? "true" : "false"));
