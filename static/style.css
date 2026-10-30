@@ -99,7 +99,13 @@ pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);fo
 .facts li:last-child{border-right:0}
 .facts .bad{color:var(--acc)}
 .stone-head .callout{max-width:720px}
-.stone-head .tabs{margin-top:10px}
+/* the line sits outside the faded tabs */
+.tabs-line{margin-top:10px;border-bottom:1px solid var(--line)}
+.stone-head .tabs{border-bottom:0;scrollbar-width:none}
+.stone-head .tabs::-webkit-scrollbar{display:none}
+.tabs.more-r{mask-image:linear-gradient(to right,#000 calc(100% - 40px),transparent)}
+.tabs.more-l{mask-image:linear-gradient(to left,#000 calc(100% - 40px),transparent)}
+.tabs.more-l.more-r{mask-image:linear-gradient(to right,transparent,#000 40px,#000 calc(100% - 40px),transparent)}
 .inst-head{display:none}
 .tabs a:hover{color:var(--ink);text-decoration:none}
 .stone-body{display:grid;grid-template-columns:minmax(0,1fr) 340px}

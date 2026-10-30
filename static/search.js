@@ -105,6 +105,25 @@
     });
   }
 
+  // Stone tabs: keep the current one in view, fade an edge with more beyond.
+  const bar = document.querySelector(".stone-head .tabs");
+  if (bar) {
+    const cur = bar.querySelector("[aria-current]");
+    if (cur) {
+      // 40px: clear of the fade.
+      const a = cur.getBoundingClientRect(), b = bar.getBoundingClientRect();
+      if (a.right > b.right - 40) bar.scrollLeft += a.right - b.right + 40;
+    }
+    const edges = () => {
+      const max = bar.scrollWidth - bar.clientWidth;
+      bar.classList.toggle("more-l", bar.scrollLeft > 1);
+      bar.classList.toggle("more-r", bar.scrollLeft < max - 1);
+    };
+    bar.addEventListener("scroll", edges, { passive: true });
+    addEventListener("resize", edges);
+    edges();
+  }
+
   // 404.html: name the missing path.
   const lost = document.getElementById("lost-path");
   if (lost) lost.textContent = location.pathname;

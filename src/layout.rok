@@ -336,7 +336,7 @@ fn stone_head(out: str, s: Stone, tab: str) -> str {
 <nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"{r}stones/index.html\">stones</a> / {if tab == "readme" { esc(s.name) } else { f"<a href=\"{esc(r + stone_out(s.name))}\">{esc(s.name)}</a> / {tab}" }}</nav>
 <div class=\"title\"><span class=\"gl-box\" style=\"--h:{hue(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.vers)}</span></div>{about}</div></div>
 <ul class=\"facts\">{facts.to_str()}</ul>
-{notice}{inst}<nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav>
+{notice}{inst}<div class=\"tabs-line\"><nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav></div>
 </div>
 "
 }
