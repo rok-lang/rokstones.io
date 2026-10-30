@@ -39,6 +39,8 @@ mkdir -p "$T/site"
 cp -R "$repo/static" "$repo/pages" "$T/site/"
 mkdir -p "$T/site/og"
 cp -R "$repo/og/render.mjs" "$repo/og/home.html" "$repo/og/stone.html" "$repo/og/fonts" "$T/site/og/"
+mkdir -p "$T/site/web/assets"
+cp -R "$repo/web/assets/fonts" "$T/site/web/assets/"
 sed -e 's|^ *out: .*|    out: "public",|' "$repo/site.rokon" > "$T/site/site.rokon"
 
 "$repo/tests/fake-github/target/debug/fake_github" "127.0.0.1:$gh_port" test-secret &
@@ -152,6 +154,13 @@ rm -f "$T/b"
 req GET /publishing -H "If-None-Match: $etag"
 expect_code 304 "if-none-match"
 [ ! -s "$T/b" ] || fail "304 with a body"
+req GET /fonts/Geist-Variable.woff2
+expect_code 200 "font"
+[ "$(header content-type)" = "font/woff2" ] || fail "font type: $(header content-type)"
+[ "$(header cache-control)" = "public, max-age=86400" ] || fail "font cache: $(header cache-control)"
+req GET /fonts/pretendard.css
+[ "$(header content-type)" = "text/css; charset=utf-8" ] || fail "pretendard.css type: $(header content-type)"
+grep -q 'googleapis\|jsdelivr' "$T/site/public/index.html" && fail "third-party fonts"
 grep -q 'href="/login"' "$T/site/public/index.html" && fail "login button while publishing is closed"
 ok "static files"
 

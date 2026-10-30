@@ -397,11 +397,12 @@ fn main() throws {
     // Served by `serve`, not files.
     statics.insert("login");
     statics.insert("me");
-    // The kit's files (web/, built in), then static/.
+    // The kit's files (web/, built in), its fonts, then static/.
     for f in kit::files(kit::Mark::Rokstones) {
         try fs::write(out_root + "/" + f.name, f.data);
         statics.insert(f.name);
     }
+    for name in try kit::copy_fonts(kit::FONTS_DIR, out_root + "/fonts") { statics.insert("fonts/" + name); }
     for entry in fs::walk("static") {
         let e = try entry.get();
         if !e.is_file() { continue; }

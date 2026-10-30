@@ -27,7 +27,7 @@ button{font:inherit}
 
 /* search results */
 .results{position:absolute;z-index:10;top:calc(100% + 6px);left:-1px;right:-1px;margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:0 8px 24px rgba(21,22,27,.12);max-height:min(420px,70vh);overflow-y:auto;cursor:default}
-.dk .results{box-shadow:0 8px 24px rgba(237,238,242,.12)}
+@media not print{.dk .results{box-shadow:0 8px 24px rgba(237,238,242,.12)}}
 .results a{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 10px;border-radius:6px;color:var(--ink);text-decoration:none!important}
 .results a[aria-selected=true],.results a:hover{background:var(--bg-2)}
 .results .n{font-family:var(--mono);font-size:14px;line-height:20px;font-weight:500;color:var(--ink)}
@@ -63,11 +63,14 @@ mark{background:none;color:var(--ink);font-weight:600;text-decoration:underline;
 /* grey above for engines without oklch() (Safari < 15.4) */
 @supports (color:oklch(0 0 0)){
   .gl path{fill:oklch(0.7 0.11 var(--h))}
-  .dk .gl path{fill:oklch(0.78 0.09 var(--h))}
   .gl-box{background:oklch(0.95 0.035 var(--h))}
-  .dk .gl-box{background:oklch(0.26 0.05 var(--h))}
   .gl-box .gl path{fill:oklch(0.66 0.14 var(--h))}
-  .dk .gl-box .gl path{fill:oklch(0.82 0.11 var(--h))}
+  /* paper is light (rok.css): the dark glyphs are for screens */
+  @media not print{
+    .dk .gl path{fill:oklch(0.78 0.09 var(--h))}
+    .dk .gl-box{background:oklch(0.26 0.05 var(--h))}
+    .dk .gl-box .gl path{fill:oklch(0.82 0.11 var(--h))}
+  }
 }
 
 /* home */
@@ -88,7 +91,7 @@ pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);fo
 .page-head{display:flex;flex-direction:column;gap:6px;padding-bottom:20px}
 .list-page .rows{border-bottom:1px solid var(--line)}
 .list-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding-bottom:20px}
-.list-form .field{height:34px;padding:0 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px;box-sizing:border-box}
+.list-form .field{height:34px;padding:0 10px;border:1px solid var(--field-line);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px;box-sizing:border-box}
 .list-form input{flex:1 1 240px;max-width:360px;min-width:0}
 .list-form .field:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
 .list-form label.t-ui{color:var(--ink-2)}
@@ -242,7 +245,7 @@ pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);bo
 .acct h2{margin-top:16px}
 .acct form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .acct label{display:flex;gap:10px;align-items:center;font-size:14px}
-.acct input:not([type=hidden]){height:34px;padding:0 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink);font-family:inherit}
+.acct input:not([type=hidden]){height:34px;padding:0 10px;border:1px solid var(--field-line);border-radius:8px;background:var(--panel);color:var(--ink);font-family:inherit}
 @media (min-width:768px){.acct input:not([type=hidden]){font-size:14px}}
 .acct .callout{flex-direction:column}
 .acct pre{font-size:13px;overflow-x:auto}
@@ -295,5 +298,5 @@ pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);bo
   .md .anchor{display:none}
 }
 @media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
-@media print{.hdr,.meta,.copy,.anchor{display:none!important}}
+@media print{.hdr,.meta,.side-notes,.toc,.list-form,.copy,.anchor{display:none!important}}
 .readme>h1:first-child{display:none}

@@ -160,7 +160,7 @@ fn head(site: Site, full: str, desc: str, url: str, img: str, alt: str) -> str {
 <meta name=\"twitter:card\" content=\"summary_large_image\">
 <meta name=\"twitter:image\" content=\"{img}\">
 <meta name=\"twitter:image:alt\" content=\"{alt}\">
-{chrome::fonts()}<link rel=\"stylesheet\" href=\"{asset(site, "rok.css")}\">
+{chrome::fonts_in("/", false)}<link rel=\"stylesheet\" href=\"{asset(site, "rok.css")}\">
 <link rel=\"stylesheet\" href=\"{asset(site, "style.css")}\">
 {chrome::icons("/")}"
 }
@@ -177,7 +177,7 @@ fn footer(site: Site) -> str {
             ("Learn", f"<a href=\"{d}/learn\">Guide</a><a href=\"{d}/examples\">Examples</a><a href=\"{esc(site.playground)}\">Playground</a>"),
             ("Reference", f"<a href=\"{d}/spec\">Language spec</a><a href=\"{d}/std\">Std library</a><a href=\"{d}/learn/16-tools\">Tools</a>"),
             ("Ecosystem", f"<a href=\"/\">Stones</a><a href=\"/publishing\">Publishing</a><a href=\"{esc(site.index_repo)}\">Index repository</a><a href=\"{gh}/rok.vscode\">VS Code</a><a href=\"{gh}/rok.vim\">Vim</a>"),
-            ("Project", f"<a href=\"{esc(site.home)}/roadmap\">Roadmap</a><a href=\"{gh}\">GitHub</a><a href=\"{gh}/rok/blob/main/SECURITY.md\">Security</a><a href=\"{gh}/rok/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a>"),
+            ("Project", f"<a href=\"{esc(site.home)}/roadmap\">Roadmap</a><a href=\"{gh}\">GitHub</a><a href=\"{chrome::SECURITY}\">Security</a><a href=\"{gh}/rok/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a>"),
         ],
         sites: chrome::Sites { home: site.home, docs: site.docs + "/latest", stones: "/", playground: site.playground, current: "stones" },
         release: site.release,

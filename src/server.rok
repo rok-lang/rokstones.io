@@ -18,8 +18,6 @@ use rok::std::thread;
 use rok::std::io::byte_buf;
 use rok::std::time::{Duration, SystemTime};
 use rok::core::task::time::Instant;
-use rok::core::crypto::HashAlgorithm;
-use rok::core::crypto::sha2::Digest;
 use markdown::esc;
 use pkg::Site;
 use pkg::layout;
@@ -224,7 +222,7 @@ pub struct Resp {
 }
 
 // Cloudflare injects its Web Analytics beacon into every page it proxies.
-const CSP: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net; frame-ancestors 'none'; form-action 'self'";
+const CSP: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'";
 
 fn html(status: i32, body: str) -> Resp {
     Resp {
@@ -646,6 +644,8 @@ pub fn cache_for(site: Site, path: str, f: str, query: str) -> str {
         let drawn = try fs::read_to_str(f + ".v") catch _ { "" };
         return if !v.is_empty() && v == drawn.trim() { IMMUTABLE } else { "public, max-age=3600" };
     }
+    // The kit's fonts: unversioned names, so a day and the ETag.
+    if path.starts_with("/fonts/") { return "public, max-age=86400"; }
     let want = layout::asset_version(site, path[1:]);
     if !want.is_empty() { return if v == want { IMMUTABLE } else { "no-cache" }; }
     if f.ends_with(".html") { HTML_CACHE } else { "no-cache" }
@@ -795,15 +795,9 @@ fn handle(s: TcpStream, cfg: Cfg, site: Site) {
     eprintln(f"{r.method} {r.path} {sent} {t0.elapsed().as_ms()}ms");
 }
 
-/// A strong validator for `body`: the first 16 hex digits of its SHA-256.
-pub fn etag(body: List<u8>) -> str {
-    let d = Digest::new(HashAlgorithm::Sha256);
-    d.update(body);
-    "\"" + secret::hex(d.finish()[0:8]) + "\""
-}
-
-/// Whether an If-None-Match value names `tag`. A proxy that compresses
-/// may have marked the tag (`"..-gzip"`), and `W/` is ignored (weak
+/// Whether an If-None-Match value names `tag` (http::etag). A proxy that
+/// compresses may have marked the tag (`"..-gzip"`), which
+/// http::not_modified does not undo, and `W/` is ignored (weak
 /// comparison, as RFC 9110 has for If-None-Match).
 pub fn etag_matches(header: str, tag: str) -> bool {
     for part in header.split(",") {
@@ -821,28 +815,21 @@ pub fn etag_matches(header: str, tag: str) -> bool {
 fn respond(s: TcpStream, r: Request, status: i32, headers: List<str>, body: List<u8>) -> i32 {
     let head = r.method == "HEAD";
     if status == 200 && (r.method == "GET" || head) && !headers.contains("Cache-Control: no-store") {
-        let tag = etag(body);
+        let tag = http::etag(body);
         headers.push("ETag: " + tag);
         if etag_matches(r.header("if-none-match"), tag) {
-            try not_modified(s, headers) catch _ {};
+            // The validators and Cache-Control, not the type; http::send
+            // writes a 304 without a body or Content-Length.
+            let kept: List<str> = List::new();
+            for x in headers {
+                if !x.to_lowercase().starts_with("content-type:") { kept.push(x); }
+            }
+            try http::send(s, 304, kept, "", head) catch _ {};
             return 304;
         }
     }
     try http::send(s, status, headers, body, head) catch _ {};
     status
-}
-
-/// A 304: the caching headers and the validator, no body (web::http::send
-/// always writes a Content-Length, which a 304 must not get wrong).
-fn not_modified(s: TcpStream, headers: List<str>) throws {
-    let h = StrBuf::new();
-    h.push_str("HTTP/1.1 304 Not Modified\r\n");
-    for x in headers {
-        if !x.to_lowercase().starts_with("content-type:") { h.push_str(x + "\r\n"); }
-    }
-    h.push_str("Connection: close\r\n\r\n");
-    try s.set_write_timeout(Duration::sec(30));
-    try s.write_all(h.to_str());
 }
 
 /// Rebuild the site whenever `STALE` is set, one build at a time. Where
@@ -954,7 +941,7 @@ fn ownership_and_tokens() {
 
 #[test]
 fn validators() {
-    let t = etag("abc".as_bytes().to_list());
+    let t = http::etag("abc");
     expect(t == "\"ba7816bf8f01cfea\"", t);
     expect(etag_matches(t, t) && etag_matches("W/" + t, t) && etag_matches("\"x\", \"ba7816bf8f01cfea-gzip\"", t) && etag_matches("*", t), "matches");
     expect(!etag_matches("", t) && !etag_matches("\"ba7816bf8f01cfeb\"", t), "misses");
