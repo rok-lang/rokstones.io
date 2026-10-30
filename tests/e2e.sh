@@ -140,6 +140,19 @@ req GET "/og.png?v=0000000000"
 [ "$(header cache-control)" = "public, max-age=3600" ] || fail "stale og.png cache: $(header cache-control)"
 req GET /style.css
 [ "$(header cache-control)" = "no-cache" ] || fail "css cache: $(header cache-control)"
+css=$(grep -o '/style.css?v=[0-9a-f]\{10\}' "$T/site/public/index.html" | head -1)
+[ -n "$css" ] || fail "no versioned style.css"
+req GET "$css"
+[ "$(header cache-control)" = "public, max-age=31536000, immutable" ] || fail "versioned css cache: $(header cache-control)"
+req GET /publishing
+[ "$(header cache-control)" = "public, max-age=60, must-revalidate" ] || fail "page cache: $(header cache-control)"
+etag=$(header etag)
+[ -n "$etag" ] || fail "no etag"
+rm -f "$T/b"
+req GET /publishing -H "If-None-Match: $etag"
+expect_code 304 "if-none-match"
+[ ! -s "$T/b" ] || fail "304 with a body"
+grep -q 'href="/login"' "$T/site/public/index.html" && fail "login button while publishing is closed"
 ok "static files"
 
 # ---- logins ----
@@ -261,6 +274,22 @@ ok "push failure"
 for _ in $(seq 100); do [ -f "$T/site/public/stones/geom.html" ] && break; sleep 0.2; done
 req GET /stones/geom
 expect_code 200 "stone page after publish"
+req GET /stones/geom/0.1.0
+expect_code 200 "version page"
+expect_body 'rel="canonical" href="[^"]*/stones/geom/0.1.0"' "version canonical"
+req GET /stones/Geom/0.1.0
+expect_code 301 "name case"
+[ "$(header location)" = "/stones/geom/0.1.0" ] || fail "name case location: $(header location)"
+req GET /stones/gem
+expect_code 404 "missing stone"
+expect_body "No stone named gem" "missing stone body"
+expect_body 'href="/stones/geom"' "closest name"
+req GET "/stones?q=geo&sort=name"
+expect_code 200 "search"
+expect_body "<title>Search: geo - " "search title"
+expect_body '<option value="name" selected>' "search sort"
+req GET "/stones?q=nothing-like-it"
+expect_body "No stones match" "no results"
 ok "site rebuilt"
 
 # Revoking a token, and logging out.

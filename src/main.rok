@@ -52,6 +52,10 @@ pub struct Site {
     pub og: str = "";
     pub og_w: i64 = 0i64;
     pub og_h: i64 = 0i64;
+    /// Content version of each stylesheet and script as `,name=v,` runs
+    /// (asset_versions; a string, so the server threads can share it), set
+    /// on load.
+    pub assets: str = "";
 }
 
 /// site.rokon, with the home card's version and size.
@@ -61,7 +65,30 @@ fn load_site() throws -> Site {
     let (w, h) = try png_size("static/og.png");
     site.og_w = w;
     site.og_h = h;
+    site.assets = try asset_versions();
     site
+}
+
+/// The first 10 hex digits of the SHA-256 of each `.css` and `.js` the
+/// build publishes: the kit's (built in) and static/'s. Pages ask for
+/// them at that version, so a changed file is a new URL.
+fn asset_versions() throws -> str {
+    let out = StrBuf::new();
+    out.push(',');
+    let put = |name: str, data: Slice<u8>| {
+        if !name.ends_with(".css") && !name.ends_with(".js") { return; }
+        let d = Digest::new(HashAlgorithm::Sha256);
+        d.update(data);
+        out.push_str(f"{name}={secret::hex(d.finish()[0:5])},");
+    };
+    for f in kit::files(kit::Mark::Rokstones) { put(f.name, f.data); }
+    for entry in fs::walk("static") {
+        let e = try entry.get();
+        if !e.is_file() { continue; }
+        let b = try fs::read(e.path());
+        put(e.path().as_str()["static/".len():], b[0:b.len()]);
+    }
+    out.to_str()
 }
 
 /// A running hash of what og/render.mjs draws a card from: itself, the
@@ -203,8 +230,11 @@ fn check(files: Dict<str, str>, statics: Set<str>) -> List<str> {
     }
     let bad: List<str> = List::new();
     for out in files.keys() {
-        for href in refs[out] {
-            if href.contains("://") || href.starts_with("mailto:") || href == "#" { continue; }
+        for raw in refs[out] {
+            if raw.contains("://") || raw.starts_with("mailto:") || raw == "#" { continue; }
+            // `?v=` on assets, `?q=` on keyword links.
+            let (p0, rest) = url::split_ref(raw);
+            let href = p0 + (if let k: usize = rest.find("#") { rest[k:] } else { "" });
             let path = href;
             let frag = "";
             if let k: usize = href.find("#") {
@@ -304,7 +334,10 @@ fn main() throws {
     files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all)));
     files.insert("publishing.html", layout::page_desc(site, "publishing.html", "Using and publishing stones", "How to add a stone to a Rok package, and how a version gets into the index.", layout::guide(guide)));
     files.insert("404.html", layout::page(site, "404.html", "Not found", layout::not_found()));
-    files.insert("stones/index.html", layout::page(site, "stones/index.html", "All stones", layout::all_stones(all)));
+    let rows: List<layout::Row> = List::new();
+    for s in all { rows.push(layout::row_of(s)); }
+    let (list_title, list_body) = layout::list_page(rows, "", "");
+    files.insert("stones/index.html", layout::page(site, "stones/index.html", list_title, list_body));
     for s in all {
         let out = layout::stone_out(s.name);
         let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a Rok stone" } else { s.desc };
@@ -321,15 +354,24 @@ fn main() throws {
         files.insert(dpo, layout::page_desc(site, dpo, f"Dependencies of {s.name}", about, layout::deps_page(site, s, have), og, alt));
         let rdo = layout::tab_out(s.name, "dependents");
         files.insert(rdo, layout::page_desc(site, rdo, f"Dependents of {s.name}", about, layout::dependents_page(site, s), og, alt));
+        for v in s.views {
+            let vabout = if v.desc.is_empty() { f"{s.name} {v.at}, a Rok stone" } else { v.desc };
+            let po = layout::ver_out(s.name, v.at);
+            files.insert(po, layout::page_desc(site, po, f"{s.name} {v.at}", vabout, layout::stone_page(site, v), og, alt));
+            let pa = layout::ver_api_out(s.name, v.at);
+            files.insert(pa, layout::page_desc(site, pa, f"API of {s.name} {v.at}", vabout, layout::api_page(site, v), og, alt));
+        }
     }
 
-    // Search index: every stone, its latest version and description.
+    // Search index: every stone, its latest version, description and keywords.
     let sx = StrBuf::new();
     sx.push('[');
     for k in 0..all.len() {
         let s = all[k];
         if k > 0 { sx.push_str(",\n"); }
-        sx.push_str(f"{{\"t\":{json_str(s.name)},\"u\":{json_str(layout::url(layout::stone_out(s.name)))},\"v\":{json_str(s.latest.vers)},\"p\":{json_str(s.desc)}}}");
+        let ks: List<str> = List::new();
+        for kw in s.meta.keywords { ks.push(json_str(kw)); }
+        sx.push_str(f"{{\"t\":{json_str(s.name)},\"u\":{json_str(layout::url(layout::stone_out(s.name)))},\"v\":{json_str(s.latest.vers)},\"p\":{json_str(s.desc)},\"k\":[{ks.join(",")}]}}");
     }
     sx.push_str("]\n");
 
@@ -349,6 +391,7 @@ fn main() throws {
     try write(out_root, "sitemap.xml", map.to_str());
     try write(out_root, "robots.txt", f"User-agent: *\nDisallow: /me\nSitemap: {site.base_url}/sitemap.xml\n");
     try write(out_root, "search-index.json", sx.to_str());
+    try write(out_root, ".stones.rokon", rokon::to_string(rows) + "\n");
     let statics: Set<str> = Set::new();
     statics.insert("search-index.json");
     // Served by `serve`, not files.

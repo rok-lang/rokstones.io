@@ -1,5 +1,8 @@
 Package {
     name: "geom",
     version: "0.3.1",
+    authors: ["Ada Park <ada@example.com>"],
+    keywords: ["geometry", "shapes", "2d"],
+    homepage: "https://example.com/geom",
     deps: { "num": "^1.2" },
 }

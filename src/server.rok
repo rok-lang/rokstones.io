@@ -18,6 +18,8 @@ use rok::std::thread;
 use rok::std::io::byte_buf;
 use rok::std::time::{Duration, SystemTime};
 use rok::core::task::time::Instant;
+use rok::core::crypto::HashAlgorithm;
+use rok::core::crypto::sha2::Digest;
 use markdown::esc;
 use pkg::Site;
 use pkg::layout;
@@ -237,6 +239,17 @@ fn html(status: i32, body: str) -> Resp {
         body: body,
         file: "",
     }
+}
+
+/// Pages anyone may cache: short, and revalidated by ETag (handle).
+pub const HTML_CACHE: str = "public, max-age=60, must-revalidate";
+pub const IMMUTABLE: str = "public, max-age=31536000, immutable";
+
+/// A generated page anyone may see, like the files in `public/`.
+fn shared_html(status: i32, body: str) -> Resp {
+    let r = html(status, body);
+    r.headers[1] = "Cache-Control: " + HTML_CACHE;
+    r
 }
 
 fn redirect(to: str, cookies: List<str>) -> Resp {
@@ -623,13 +636,64 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
 }
 
 /// An OG card asked for by the version render.mjs drew it from (the `.v`
-/// beside it) never changes: cache it for good. Bare, stale or unrendered
-/// card addresses stay short; everything else revalidates.
-pub fn cache_for(path: str, f: str, query: str) -> str {
-    if path != "/og.png" && !(path.starts_with("/og/") && path.ends_with(".png")) { return "no-cache"; }
+/// beside it), and a stylesheet or script asked for by its content
+/// version (layout::asset), never change: cache them for good. Bare,
+/// stale or unrendered card addresses stay short; pages are cached for a
+/// minute; everything else revalidates.
+pub fn cache_for(site: Site, path: str, f: str, query: str) -> str {
     let v = http::form(query).get("v") ?? "";
-    let drawn = try fs::read_to_str(f + ".v") catch _ { "" };
-    if !v.is_empty() && v == drawn.trim() { "public, max-age=31536000, immutable" } else { "public, max-age=3600" }
+    if path == "/og.png" || (path.starts_with("/og/") && path.ends_with(".png")) {
+        let drawn = try fs::read_to_str(f + ".v") catch _ { "" };
+        return if !v.is_empty() && v == drawn.trim() { IMMUTABLE } else { "public, max-age=3600" };
+    }
+    let want = layout::asset_version(site, path[1:]);
+    if !want.is_empty() { return if v == want { IMMUTABLE } else { "no-cache" }; }
+    if f.ends_with(".html") { HTML_CACHE } else { "no-cache" }
+}
+
+/// `public/.stones.rokon` (main.rok); empty when it cannot be read.
+fn rows(site: Site) -> List<layout::Row> {
+    // A rebuild swaps `public/` (see route): look again a few times.
+    for k in 0..4 {
+        if k > 0 { thread::sleep(Duration::ms(50)); }
+        let text = try fs::read_to_str(site.out + "/.stones.rokon") catch _ { continue; };
+        return try rokon::from_str(text) catch _ { List::new() };
+    }
+    List::new()
+}
+
+/// `/stones/<name>..` with no page: a 301 when the name only differs in
+/// case, else a 404 naming the stone (or its missing version) and the
+/// closest names. None when `name` is a stone and the page is something
+/// else.
+fn missing_stone(site: Site, p: str, rest: str, query: str) -> Resp | none {
+    let (raw, tail) = rest.split_once("/") ?? (rest, "");
+    let name = http::pct_decode(raw, false) ?? raw;
+    let names: List<str> = List::new();
+    for row in rows(site) { names.push(row.name); }
+    let has = names.contains(name);
+    if !has {
+        for n in names {
+            if n == name.to_lowercase() {
+                let to = "/stones/" + n + (if tail.is_empty() { "" } else { "/" + tail });
+                return Resp { status: 301, headers: [url::moved(to, query), "Cache-Control: public, max-age=3600"], body: "", file: "" };
+            }
+        }
+        let near: List<(str, str)> = List::new();
+        for n in layout::closest(names, name) { near.push(("/stones/" + n, n)); }
+        let sentence = if near.is_empty() { "Nothing in the index has that name. Search with <kbd class=\"kbd\">/</kbd>, or go to:" } else { "Stones with a similar name:" };
+        near.push(("/stones", "All stones"));
+        near.push(("/publishing", "Publishing a stone"));
+        let body = f"<div class=\"frame lost-page\">{web::chrome::not_found(f"No stone named {name}", sentence, near)}</div>\n";
+        return html(404, layout::page(site, p[1:], f"No stone named {name}", body));
+    }
+    let ver = (tail.split_once("/") ?? (tail, "")).0;
+    if !ver.is_empty() && ver.byte(0) >= 48u8 && ver.byte(0) <= 57u8 {
+        let links: List<(str, str)> = [(f"/stones/{name}/versions", f"Versions of {name}"), (f"/stones/{name}", f"{name}, latest version")];
+        let body = f"<div class=\"frame lost-page\">{web::chrome::not_found(f"No version {ver} of {name}", "The index has no such version. Go to:", links)}</div>\n";
+        return html(404, layout::page(site, p[1:], f"No version {ver} of {name}", body));
+    }
+    none
 }
 
 fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
@@ -646,6 +710,25 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     if let c: str = url::canonical(p) {
         return Resp { status: 301, headers: [url::moved(c, r.query), "Cache-Control: public, max-age=3600"], body: "", file: "" };
     }
+    // A search or another order: the list page, filtered and sorted here
+    // (it works without JS). The bare list is a file.
+    if p == "/stones" {
+        let f = http::form(r.query);
+        let q = f.get("q") ?? "";
+        let sort = f.get("sort") ?? "";
+        if !q.trim().is_empty() || !sort.is_empty() {
+            let (title, body) = layout::list_page(rows(site), q, sort);
+            return shared_html(200, layout::page(site, "stones/index.html", title, body));
+        }
+    }
+    // Stone names are lowercase: never let a case-insensitive file system
+    // answer for `/stones/JSON`.
+    if let rest: str = p.strip_prefix("/stones/") {
+        let seg = (rest.split_once("/") ?? (rest, "")).0;
+        if seg != seg.to_lowercase() {
+            if let m: Resp = missing_stone(site, p, rest, r.query) { return m; }
+        }
+    }
     // A rebuild renames `public/` away and the new site into its place
     // (main.rok): in between there is no site, which is not a 404.
     for k in 0..5 {
@@ -654,8 +737,11 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
             thread::sleep(Duration::ms(50));
         }
         if let f: str = http::page_file(site.out, p) {
-            return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: " + cache_for(p, f, r.query)], body: "", file: f };
+            return Resp { status: 200, headers: [f"Content-Type: {http::content_type(f)}", "Cache-Control: " + cache_for(site, p, f, r.query)], body: "", file: f };
         }
+    }
+    if let rest: str = p.strip_prefix("/stones/") {
+        if let m: Resp = missing_stone(site, p, rest, r.query) { return m; }
     }
     // The 404 every Rok site shares, as public/404.html has it.
     html(404, layout::page(site, p[1:], "Not found", layout::not_found()))
@@ -692,21 +778,71 @@ fn handle(s: TcpStream, cfg: Cfg, site: Site) {
         eprintln(f"{r.method} {r.path}: {e}");
         message(site, r.path, 500, "Server error", "Something went wrong.")
     };
-    let head = r.method == "HEAD";
+    let sent = resp.status;
     if !resp.file.is_empty() {
         if let data: List<u8> = read_page(site, r.path, resp.file) {
-            try http::send(s, 200, resp.headers, data, head) catch _ {};
+            sent = respond(s, r, 200, resp.headers, data);
         } else {
             resp = message(site, r.path, 503, "Try again", "The site is being rebuilt. Reload the page in a moment.");
             resp.headers.push("Retry-After: 1");
-            try http::send(s, resp.status, resp.headers, resp.body, head) catch _ {};
+            sent = respond(s, r, resp.status, resp.headers, resp.body.as_bytes().to_list());
         }
     } else {
-        try http::send(s, resp.status, resp.headers, resp.body, head) catch _ {};
+        sent = respond(s, r, resp.status, resp.headers, resp.body.as_bytes().to_list());
     }
     s.close();
     // The path only: queries carry OAuth codes.
-    eprintln(f"{r.method} {r.path} {resp.status} {t0.elapsed().as_ms()}ms");
+    eprintln(f"{r.method} {r.path} {sent} {t0.elapsed().as_ms()}ms");
+}
+
+/// A strong validator for `body`: the first 16 hex digits of its SHA-256.
+pub fn etag(body: List<u8>) -> str {
+    let d = Digest::new(HashAlgorithm::Sha256);
+    d.update(body);
+    "\"" + secret::hex(d.finish()[0:8]) + "\""
+}
+
+/// Whether an If-None-Match value names `tag`. A proxy that compresses
+/// may have marked the tag (`"..-gzip"`), and `W/` is ignored (weak
+/// comparison, as RFC 9110 has for If-None-Match).
+pub fn etag_matches(header: str, tag: str) -> bool {
+    for part in header.split(",") {
+        let t = part.trim();
+        if t == "*" { return true; }
+        t = t.strip_prefix("W/") ?? t;
+        if let k: usize = t.find("-") { t = t[:k] + "\""; }
+        if t == tag { return true; }
+    }
+    false
+}
+
+/// Send a response. A 200 anyone may cache gets an ETag, and a request
+/// that already has it a 304. The status sent.
+fn respond(s: TcpStream, r: Request, status: i32, headers: List<str>, body: List<u8>) -> i32 {
+    let head = r.method == "HEAD";
+    if status == 200 && (r.method == "GET" || head) && !headers.contains("Cache-Control: no-store") {
+        let tag = etag(body);
+        headers.push("ETag: " + tag);
+        if etag_matches(r.header("if-none-match"), tag) {
+            try not_modified(s, headers) catch _ {};
+            return 304;
+        }
+    }
+    try http::send(s, status, headers, body, head) catch _ {};
+    status
+}
+
+/// A 304: the caching headers and the validator, no body (web::http::send
+/// always writes a Content-Length, which a 304 must not get wrong).
+fn not_modified(s: TcpStream, headers: List<str>) throws {
+    let h = StrBuf::new();
+    h.push_str("HTTP/1.1 304 Not Modified\r\n");
+    for x in headers {
+        if !x.to_lowercase().starts_with("content-type:") { h.push_str(x + "\r\n"); }
+    }
+    h.push_str("Connection: close\r\n\r\n");
+    try s.set_write_timeout(Duration::sec(30));
+    try s.write_all(h.to_str());
 }
 
 /// Rebuild the site whenever `STALE` is set, one build at a time. Where
@@ -814,6 +950,14 @@ fn ownership_and_tokens() {
     let back: Db = try rokon::from_str(rokon::to_string(db)) catch e { panic(f"{e}"); };
     expect(back.tokens.len() == 1 && back.tokens[0].hash == db.tokens[0].hash, "data file round trip");
     expect(date(0i64) == "never" && date(1700000000i64) == "2023-11-14" && date(951782400i64) == "2000-02-29", "dates");
+}
+
+#[test]
+fn validators() {
+    let t = etag("abc".as_bytes().to_list());
+    expect(t == "\"ba7816bf8f01cfea\"", t);
+    expect(etag_matches(t, t) && etag_matches("W/" + t, t) && etag_matches("\"x\", \"ba7816bf8f01cfea-gzip\"", t) && etag_matches("*", t), "matches");
+    expect(!etag_matches("", t) && !etag_matches("\"ba7816bf8f01cfeb\"", t), "misses");
 }
 
 #[test]

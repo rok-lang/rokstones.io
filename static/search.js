@@ -1,7 +1,7 @@
 // Header menu, stone search, code block bars, install tabs. The theme
 // is theme.js, the search shortcut keys.js and Copy copy.js, from the
 // web kit.
-// search-index.json: [{t: name, u: canonical path, v: latest version, p: description}].
+// search-index.json: [{t: name, u: canonical path, v: latest version, p: description, k: keywords}].
 (() => {
   let index = null;
   const load = () =>
@@ -92,8 +92,8 @@
   const lost = document.getElementById("lost-path");
   if (lost) lost.textContent = location.pathname;
 
-  // Every term must be in the name or the description; `why` says
-  // where they were found.
+  // Every term must be in the name, the description or a keyword; `why`
+  // says where they were found. layout.rok's search ranks the same way.
   const match = (data, query) => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     const q = terms.join(" ");
@@ -101,11 +101,15 @@
     for (const e of data) {
       const t = e.t.toLowerCase();
       const p = e.p.toLowerCase();
-      if (!terms.every((w) => t.includes(w) || p.includes(w))) continue;
-      const inName = terms.some((w) => t.includes(w));
-      const inDesc = terms.some((w) => p.includes(w));
-      e.why = inName && inDesc ? "name and description" : inName ? "name" : "description";
-      hits.push([t === q ? 0 : t.startsWith(q) ? 1 : t.includes(q) ? 2 : 3, e]);
+      const ks = (e.k || []).map((k) => k.toLowerCase());
+      const inKw = (w) => ks.some((k) => k.includes(w));
+      if (!terms.every((w) => t.includes(w) || p.includes(w) || inKw(w))) continue;
+      const where = [];
+      if (terms.some((w) => t.includes(w))) where.push("name");
+      if (terms.some((w) => p.includes(w))) where.push("description");
+      if (terms.some(inKw)) where.push("keywords");
+      e.why = where.length === 3 ? "name, description and keywords" : where.join(" and ");
+      hits.push([t === q ? 0 : t.startsWith(q) ? 1 : t.includes(q) ? 2 : ks.includes(q) ? 3 : 4, e]);
     }
     hits.sort((a, b) => a[0] - b[0] || a[1].t.localeCompare(b[1].t));
     return [hits.map((h) => h[1]), terms];
@@ -225,56 +229,9 @@
     });
     document.addEventListener("click", (ev) => { if (!form.contains(ev.target)) show(false); });
 
-    // The full list, filtered by ?q=.
-    const list = document.querySelector(".list-page .rows");
-    const query = new URLSearchParams(location.search).get("q");
-    if (list && query && query.trim()) {
-      q.value = query;
-      load().then((data) => {
-        const [hits, terms] = match(data, query);
-        const want = new Map(hits.map((e, k) => [e.t, k]));
-        const rows = [...list.children];
-        for (const li of rows) {
-          const name = li.querySelector(".nm").textContent;
-          li.hidden = !want.has(name);
-          li.style.order = want.get(name) ?? 0;
-          const nm = li.querySelector(".nm");
-          nm.replaceChildren(...marked(name, terms));
-          const desc = li.querySelector(".desc:not(.none)");
-          if (desc) {
-            desc.dataset.text ??= desc.textContent;
-            desc.replaceChildren(...marked(desc.dataset.text, terms));
-          }
-          const e = hits[want.get(name)];
-          let why = li.querySelector(".why");
-          if (e) {
-            if (!why) {
-              why = document.createElement("span");
-              why.className = "why";
-              li.querySelector(".nl").append(why);
-            }
-            why.textContent = "matches " + e.why;
-          }
-        }
-        list.style.display = "flex";
-        list.style.flexDirection = "column";
-        list.hidden = !hits.length;
-        document.getElementById("no-match").hidden = hits.length > 0;
-        const title = document.getElementById("list-title");
-        title.textContent = "Search results";
-        const note = document.getElementById("list-note");
-        const qt = `“${query.trim()}”`;
-        if (!hits.length) {
-          note.textContent = `No stones match ${qt}.`;
-        } else {
-          note.textContent = hits.length === 1 ? `1 stone matches ${qt}. ` : `${hits.length} stones match ${qt}, best match first. `;
-          const all = document.createElement("a");
-          all.href = location.pathname;
-          all.textContent = "Show all stones";
-          note.append(all);
-        }
-        document.title = `Search results for ${query.trim()} - rokstones.io`;
-      });
-    }
+    // The full list is filtered and sorted by the server (?q=, ?sort=);
+    // a new order applies as soon as it is picked.
+    const sort = document.getElementById("list-sort");
+    if (sort) sort.addEventListener("change", () => sort.form.submit());
   }
 })();

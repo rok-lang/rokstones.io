@@ -87,6 +87,12 @@ pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);fo
 .list-page{padding-top:48px;padding-bottom:72px;max-width:1160px}
 .page-head{display:flex;flex-direction:column;gap:6px;padding-bottom:20px}
 .list-page .rows{border-bottom:1px solid var(--line)}
+.list-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding-bottom:20px}
+.list-form .field{height:34px;padding:0 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px;box-sizing:border-box}
+.list-form input{flex:1 1 240px;max-width:360px;min-width:0}
+.list-form .field:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.list-form label.t-ui{color:var(--ink-2)}
+@media (max-width:767px){.list-form .field{font-size:16px}}
 
 /* stone */
 .stone-head{padding-top:36px;display:flex;flex-direction:column;gap:14px}
@@ -138,7 +144,10 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .vers li{display:flex;align-items:center;gap:10px;font-size:14px;line-height:20px}
 .vers .dot{width:8px;height:8px;border-radius:50%;background:var(--acc);flex:none}
 .vers .dot.off{background:var(--line-2)}
-.vers .v{font-family:var(--mono)}
+.vers .v{font-family:var(--mono);color:var(--ink)}
+.vers a.v[aria-current]{font-weight:600}
+.tbl a.v{font-family:var(--mono);color:var(--ink)}
+.kws a{margin-right:8px}
 .vers .tag{margin-left:0}
 .vers .c{margin-left:auto;font-size:13px;line-height:18px;color:var(--ink-3)}
 .vers>.t-small{color:var(--ink-3)}

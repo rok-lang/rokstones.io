@@ -46,6 +46,18 @@ pub struct Facts {
     pub rok_lines: usize;
 }
 
+/// Package metadata from the commit's `rok.rokon`; empty when not given.
+pub struct Meta {
+    pub keywords: List<str>;
+    /// Names only: an `<address>` after a name is dropped.
+    pub authors: List<str>;
+    /// http(s) addresses only; `""`: none.
+    pub homepage: str;
+    pub documentation: str;
+}
+
+pub fn no_meta() -> Meta { Meta { keywords: List::new(), authors: List::new(), homepage: "", documentation: "" } }
+
 pub struct RDep {
     pub name: str;
     pub req: str;
@@ -78,6 +90,15 @@ pub struct Stone {
     pub api_none: str;
     /// `use ..;` for the install box (apidoc::import_line); `""`: none.
     pub import: str;
+    pub meta: Meta;
+    /// The version a version page shows (`readme`, `api`, .. are its);
+    /// `""` on the stone's own pages.
+    pub at: str = "";
+    /// The stone's latest version, on a version page.
+    pub top: str = "";
+    /// One stone per version for its version pages, newest first; empty
+    /// in those stones themselves.
+    pub views: List<Stone> = List::new();
 }
 
 pub struct Index {
@@ -541,6 +562,100 @@ fn first_para(html: str, n: usize) -> str {
     out.to_str().trim_end() + "..."
 }
 
+/// The stone `k` as version `v` shows it: README, tree facts, API and
+/// metadata of its commit.
+fn shown(r: Readmes, k: str, file: str, versions: List<Version>, v: Version, rdeps: List<RDep>, t: i64, d: str) -> Stone {
+    let html = "";
+    let text = readme_text(r, k, v.url, v.rev);
+    let facts: Facts | none = none;
+    let api: List<web::apidoc::Module> = List::new();
+    let api_none = "tree";
+    let meta = no_meta();
+    if let tr: Tree = tree_of_stone(r, k, v.url, v.rev) {
+        let fl = tree_files(tr);
+        facts = facts_of(tr, fl);
+        api = apidoc::collect(k.replace("-", "_"), |p| tree_read(tr, p));
+        api_none = if api.is_empty() { "lib" } else { "" };
+        meta = meta_of(tree_read(tr, "rok.rokon") ?? "");
+    }
+    if !text.is_empty() {
+        let doc = markdown::render_untrusted(text, layout::md(|h| repo_link(v.url, v.rev, h)));
+        html = fix_headings(doc.html, k);
+    }
+    Stone {
+        name: k,
+        file: file,
+        versions: versions,
+        latest: v,
+        time: t,
+        date: d,
+        readme: html,
+        desc: if v.description.is_empty() { first_para(html, 140) } else { v.description },
+        rdeps: rdeps,
+        facts: facts,
+        api: api,
+        api_none: api_none,
+        import: apidoc::import_line(k.replace("-", "_"), api, text),
+        meta: meta,
+    }
+}
+
+/// A new `Stone` with the fields of `s`.
+fn again(s: Stone) -> Stone {
+    Stone { name: s.name, file: s.file, versions: s.versions, latest: s.latest, time: s.time, date: s.date, readme: s.readme, desc: s.desc, rdeps: s.rdeps, facts: s.facts, api: s.api, api_none: s.api_none, import: s.import, meta: s.meta }
+}
+
+fn str_list(f: OrderedDict<str, Value>, k: str) -> List<str> {
+    let out: List<str> = List::new();
+    if let Value::List(xs) = f.get(k) ?? Value::None {
+        for x in xs {
+            if let Value::Str(s) = x {
+                let t = s.trim();
+                if !t.is_empty() && !out.contains(t) { out.push(t); }
+            }
+        }
+    }
+    out
+}
+
+fn web_url(u: str) -> str {
+    let t = u.trim();
+    if (t.starts_with("https://") || t.starts_with("http://")) && !t.contains(" ") { t } else { "" }
+}
+
+/// Keywords, authors, homepage and documentation from a `rok.rokon`.
+pub fn meta_of(text: str) -> Meta {
+    let m = no_meta();
+    let v = try rokon::parse(text) catch _ { return m; };
+    let f = fields_of(v, "Package") ?? { return m; };
+    m.keywords = str_list(f, "keywords");
+    for a in str_list(f, "authors") {
+        // `Name <mail>`: the name; an address alone stays out.
+        let n = (if let k: usize = a.find("<") { a[:k] } else { a }).trim();
+        if !n.is_empty() && !n.contains("@") { m.authors.push(n); }
+    }
+    m.homepage = web_url(get_str(f, "homepage") ?? "");
+    m.documentation = web_url(get_str(f, "documentation") ?? "");
+    m
+}
+
+/// A README under the stone's own `<h1>`: a leading `<h1>` that is the
+/// stone's name goes, and any other `<h1>` moves every heading down one.
+pub fn fix_headings(html: str, name: str) -> str {
+    let out = html.trim_start();
+    if out.starts_with("<h1") {
+        if let e: usize = out.find("</h1>") {
+            let open = out.find(">") ?? 0;
+            let text = markdown::strip_tags(out[open + 1:e]).trim();
+            text = (text.strip_prefix("#") ?? text).trim();
+            if text.to_lowercase() == name.to_lowercase() { out = out[e + 5:].trim_start(); }
+        }
+    }
+    if !out.contains("<h1") { return out; }
+    for k in [5, 4, 3, 2, 1] { out = out.replace(f"<h{k}", f"<h{k + 1}").replace(f"</h{k}>", f"</h{k + 1}>"); }
+    out
+}
+
 pub fn load(dir: str, r: Readmes) -> Index {
     let errors: List<str> = List::new();
     let by_name: Dict<str, List<Version>> = Dict::new();
@@ -606,37 +721,20 @@ pub fn load(dir: str, r: Readmes) -> Index {
     let stones: List<Stone> = List::new();
     for k in names {
         let l = latest[k];
-        let html = "";
-        let text = readme_text(r, k, l.url, l.rev);
-        let facts: Facts | none = none;
-        let api: List<web::apidoc::Module> = List::new();
-        let api_none = "tree";
-        if let t: Tree = tree_of_stone(r, k, l.url, l.rev) {
-            let files = tree_files(t);
-            facts = facts_of(t, files);
-            api = apidoc::collect(k.replace("-", "_"), |p| tree_read(t, p));
-            api_none = if api.is_empty() { "lib" } else { "" };
-        }
-        if !text.is_empty() {
-            let doc = markdown::render_untrusted(text, layout::md(|h| repo_link(l.url, l.rev, h)));
-            html = doc.html;
-        }
         let (t, d) = dates.get(files[k]) ?? (0i64, "");
-        stones.push(Stone {
-            name: k,
-            file: files[k],
-            versions: by_name[k],
-            latest: l,
-            time: t,
-            date: d,
-            readme: html,
-            desc: if l.description.is_empty() { first_para(html, 140) } else { l.description },
-            rdeps: rdeps.get(k) ?? List::new(),
-            facts: facts,
-            api: api,
-            api_none: api_none,
-            import: apidoc::import_line(k.replace("-", "_"), api, text),
-        });
+        let s = shown(r, k, files[k], by_name[k], l, rdeps.get(k) ?? List::new(), t, d);
+        let vs: List<Version> = List::new();
+        for v in by_name[k] { vs.push(v); }
+        vs.sort_by(|a: Version, b: Version| cmp_vers(b.vers, a.vers));
+        let views: List<Stone> = List::new();
+        for v in vs {
+            let x = if v.vers == l.vers { again(s) } else { shown(r, k, files[k], by_name[k], v, s.rdeps, t, d) };
+            x.at = v.vers;
+            x.top = l.vers;
+            views.push(x);
+        }
+        s.views = views;
+        stones.push(s);
     }
     Index { stones: stones, errors: errors }
 }
@@ -654,6 +752,22 @@ fn semver_order() {
     expect(cmp_vers("1.0.0-alpha", "1.0.0-alpha.1") == Ordering::Less, "shorter pre first");
     expect(cmp_vers("1.0.0+b", "1.0.0") == Ordering::Equal, "build ignored");
     expect(add_req("1.2.3") == "^1.2.3" && add_req("0.1.0") == "^0.1.0" && add_req("1.0.0-rc.1") == "=1.0.0-rc.1", "add_req");
+}
+
+#[test]
+fn readme_headings() {
+    let a = "<h1 id=\"json\"><a class=\"anchor\" href=\"#json\">#</a>JSON</h1>\n<p>x</p>\n<h2>Use</h2>";
+    expect(fix_headings(a, "json") == "<p>x</p>\n<h2>Use</h2>", "name heading dropped");
+    expect(fix_headings("<h1>Other</h1><h2>b</h2><h6>c</h6>", "json") == "<h2>Other</h2><h3>b</h3><h6>c</h6>", "demoted");
+    expect(fix_headings("<p>a</p><h2>b</h2>", "json") == "<p>a</p><h2>b</h2>", "left alone");
+}
+
+#[test]
+fn manifests() {
+    let m = meta_of("Package { name: \"x\", version: \"0.1.0\", keywords: [\"json\", \"parser\", \"json\"], authors: [\"Ann Lee <ann@x.org>\", \"bob@x.org\"], homepage: \"javascript:x\", documentation: \"https://x.org/doc\" }");
+    expect(m.keywords.len() == 2 && m.authors.len() == 1 && m.authors[0] == "Ann Lee", "lists");
+    expect(m.homepage.is_empty() && m.documentation == "https://x.org/doc", "links");
+    expect(meta_of("not rokon").keywords.is_empty(), "bad manifest");
 }
 
 #[test]

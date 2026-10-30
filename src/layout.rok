@@ -5,8 +5,10 @@ use pkg::Site;
 use markdown::{Options, esc};
 use pkg::stones;
 use pkg::stones::{Stone, Version};
+use rok::core::cmp::Ordering;
 use pkg::apidoc;
 use web::chrome;
+use web::http;
 
 /// The address of output file `out`, root-relative and canonical: no
 /// `.html`, a directory index is the directory, no trailing slash
@@ -26,6 +28,30 @@ pub fn stone_out(name: str) -> str { f"stones/{name}.html" }
 
 /// A stone's tab page: `api`, `versions`, `dependencies` or `dependents`.
 pub fn tab_out(name: str, tab: str) -> str { f"stones/{name}/{tab}.html" }
+
+/// A version's page; its API page is `ver_out(..)` with `/api` for `.html`.
+pub fn ver_out(name: str, v: str) -> str { f"stones/{name}/{v}.html" }
+
+pub fn ver_api_out(name: str, v: str) -> str { f"stones/{name}/{v}/api.html" }
+
+/// The readme page of `s`: the stone's own, or the version's it shows.
+fn readme_out(s: Stone) -> str { if s.at.is_empty() { stone_out(s.name) } else { ver_out(s.name, s.at) } }
+
+fn api_out(s: Stone) -> str { if s.at.is_empty() { tab_out(s.name, "api") } else { ver_api_out(s.name, s.at) } }
+
+/// `/name?v=<content version>` of a stylesheet or script (main.rok
+/// load_site); `serve` caches it for good at that version.
+pub fn asset(site: Site, name: str) -> str {
+    let v = asset_version(site, name);
+    if v.is_empty() { "/" + name } else { f"/{name}?v={v}" }
+}
+
+/// The content version of asset `name`; `""` when it has none.
+pub fn asset_version(site: Site, name: str) -> str {
+    let k = site.assets.find("," + name + "=") ?? { return ""; };
+    let rest = site.assets[k + name.len() + 2:];
+    rest[:rest.find(",") ?? rest.len()]
+}
 
 /// Markdown options: `link` for hrefs, ```rok / ```rokon highlighted.
 pub fn md(link: fn(str) -> str) -> Options { Options { link: link, code: code_html } }
@@ -119,7 +145,7 @@ fn head(site: Site, full: str, desc: str, url: str, img: str, alt: str) -> str {
 <meta name=\"color-scheme\" content=\"light dark\">
 <meta name=\"theme-color\" content=\"#fbfbfc\">
 <title>{esc(full)}</title>
-{chrome::theme_script("/")}<meta name=\"description\" content=\"{desc}\">
+{chrome::theme_script("/").replace("/theme.js\"", asset(site, "theme.js") + "\"")}<meta name=\"description\" content=\"{desc}\">
 <link rel=\"canonical\" href=\"{esc(url)}\">
 <meta property=\"og:type\" content=\"website\">
 <meta property=\"og:site_name\" content=\"{esc(site.title)}\">
@@ -134,8 +160,8 @@ fn head(site: Site, full: str, desc: str, url: str, img: str, alt: str) -> str {
 <meta name=\"twitter:card\" content=\"summary_large_image\">
 <meta name=\"twitter:image\" content=\"{img}\">
 <meta name=\"twitter:image:alt\" content=\"{alt}\">
-{chrome::fonts()}<link rel=\"stylesheet\" href=\"/rok.css\">
-<link rel=\"stylesheet\" href=\"/style.css\">
+{chrome::fonts()}<link rel=\"stylesheet\" href=\"{asset(site, "rok.css")}\">
+<link rel=\"stylesheet\" href=\"{asset(site, "style.css")}\">
 {chrome::icons("/")}"
 }
 
@@ -194,35 +220,150 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
 {search_box()}
 <nav id=\"nav\" class=\"nav\" aria-label=\"Registry\"><a href=\"/stones\"{browse}>Browse</a><a href=\"/publishing\"{publish}>Publishing</a><a href=\"{esc(site.docs)}/latest\">Docs</a></nav>
 {chrome::theme_button(false)}
-{account}
-<button class=\"ib menu\" type=\"button\" aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"M4 7h16M4 12h16M4 17h16\"/></svg></button>
+{account}<button class=\"ib menu\" type=\"button\" aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"M4 7h16M4 12h16M4 17h16\"/></svg></button>
 </div>
 </header>
 <main id=\"content\">
 {body}
 </main>
-{footer(site)}<script src=\"/keys.js\" defer></script>
-<script src=\"/copy.js\" defer></script>
-<script src=\"/search.js\" defer></script>
+{footer(site)}<script src=\"{asset(site, "keys.js")}\" defer></script>
+<script src=\"{asset(site, "copy.js")}\" defer></script>
+<script src=\"{asset(site, "search.js")}\" defer></script>
 </body>
 </html>
 "
 }
 
-/// `<li>` of a stone in a list; `note` replaces the date.
-fn stone_row(s: Stone, note: str) -> str {
+/// A stone as the lists and search show it. main.rok writes every one
+/// to `public/.stones.rokon` (dot files are never served), which `serve`
+/// searches and checks stone addresses against.
+#[derive(Rokon)]
+pub struct Row {
+    pub name: str;
+    pub vers: str;
+    pub desc: str;
+    pub keywords: List<str>;
+    pub yanked: bool;
+    /// Last index commit touching it: unix time and `YYYY-MM-DD`.
+    pub time: i64;
+    pub date: str;
+}
+
+pub fn row_of(s: Stone) -> Row {
+    Row { name: s.name, vers: s.latest.vers, desc: s.desc, keywords: s.meta.keywords, yanked: s.latest.yanked, time: s.time, date: s.date }
+}
+
+/// A search result: how well it matched and where.
+pub struct Hit {
+    pub row: Row;
+    pub rank: i32;
+    pub why: str;
+}
+
+/// The words of a query, lowercase.
+pub fn terms_of(q: str) -> List<str> {
+    let out: List<str> = List::new();
+    for w in q.to_lowercase().replace("\t", " ").split(" ") {
+        if !w.is_empty() { out.push(w); }
+    }
+    out
+}
+
+/// The rows with every term of `q` in the name, description or a keyword
+/// (all rows for an empty `q`), ordered by `sort`: `relevance` (exact
+/// name, name prefix, name, keyword, the rest; then by name), `name` or
+/// `updated` (newest first). search.js matches the same way.
+pub fn search(rows: List<Row>, q: str, sort: str) -> List<Hit> {
+    let terms = terms_of(q);
+    let whole = terms.join(" ");
+    let hits: List<Hit> = List::new();
+    for r in rows {
+        let t = r.name.to_lowercase();
+        let p = r.desc.to_lowercase();
+        let ks: List<str> = List::new();
+        for k in r.keywords { ks.push(k.to_lowercase()); }
+        let in_kw = |w: str| {
+            for k in ks {
+                if k.contains(w) { return true; }
+            }
+            false
+        };
+        let all = true;
+        let n = false;
+        let d = false;
+        let kw = false;
+        for w in terms {
+            let a = t.contains(w);
+            let b = p.contains(w);
+            let c = in_kw(w);
+            if !a && !b && !c { all = false; }
+            n = n || a;
+            d = d || b;
+            kw = kw || c;
+        }
+        if !all { continue; }
+        let wheres: List<str> = List::new();
+        if n { wheres.push("name"); }
+        if d { wheres.push("description"); }
+        if kw { wheres.push("keywords"); }
+        let rank = if terms.is_empty() { 0 } else if t == whole { 0 } else if t.starts_with(whole) { 1 } else if t.contains(whole) { 2 } else if ks.contains(whole) { 3 } else { 4 };
+        hits.push(Hit { row: r, rank: rank, why: if wheres.len() == 3 { "name, description and keywords" } else { wheres.join(" and ") } });
+    }
+    if sort == "updated" {
+        hits.sort_by(|a: Hit, b: Hit| if a.row.time != b.row.time { b.row.time.cmp(a.row.time) } else { a.row.name.cmp(b.row.name) });
+    } else if sort == "name" {
+        hits.sort_by(|a: Hit, b: Hit| a.row.name.cmp(b.row.name));
+    } else {
+        hits.sort_by(|a: Hit, b: Hit| if a.rank != b.rank { a.rank.cmp(b.rank) } else { a.row.name.cmp(b.row.name) });
+    }
+    hits
+}
+
+/// `text` escaped, each term wrapped in `<mark>`. Non-ASCII text is left
+/// unmarked: its lowercase may not line up byte for byte.
+fn marked(text: str, terms: List<str>) -> str {
+    if terms.is_empty() { return esc(text); }
+    for c in text.chars() {
+        if !c.is_ascii() { return esc(text); }
+    }
+    let lo = text.to_lowercase();
+    let out = StrBuf::new();
+    let i = 0usize;
+    while i < text.len() {
+        let best = text.len();
+        let len = 0usize;
+        for w in terms {
+            if let k: usize = lo[i:].find(w) {
+                if i + k < best || (i + k == best && w.len() > len) {
+                    best = i + k;
+                    len = w.len();
+                }
+            }
+        }
+        out.push_str(esc(text[i:best]));
+        if best == text.len() { break; }
+        out.push_str(f"<mark>{esc(text[best:best + len])}</mark>");
+        i = best + len;
+    }
+    out.to_str()
+}
+
+/// `<li>` of a stone in a list; `note` replaces the date, `terms` are
+/// marked and `why` says where they matched.
+fn stone_row(s: Row, note: str, terms: List<str> = List::new(), why: str = "") -> str {
     let href = esc(url(stone_out(s.name)));
-    let desc = if s.desc.is_empty() { "<span class=\"desc none\">No description</span>" } else { f"<span class=\"desc\">{esc(s.desc)}</span>" };
-    let gone = if s.latest.yanked { " <span class=\"tag\">yanked</span>" } else { "" };
+    let desc = if s.desc.is_empty() { "<span class=\"desc none\">No description</span>" } else { f"<span class=\"desc\">{marked(s.desc, terms)}</span>" };
+    let gone = if s.yanked { " <span class=\"tag\">yanked</span>" } else { "" };
+    let matched = if why.is_empty() { "" } else { f"<span class=\"why\">matches {why}</span>" };
     let when = if !note.is_empty() { f"<span class=\"when\">{note}</span>" } else if s.date.is_empty() { "<span class=\"when\"></span>" } else { f"<time class=\"when\" datetime=\"{esc(s.date)}\">{esc(s.date)}</time>" };
-    f"<li{if s.latest.yanked { " class=\"yanked\"" } else { "" }}><a class=\"st\" href=\"{href}\">{glyph(s.name, 34, "gl")}<span class=\"main\"><span class=\"nl\"><b class=\"nm\">{esc(s.name)}</b>{gone}</span>{desc}</span><span class=\"ver\">{esc(s.latest.vers)}</span>{when}</a></li>"
+    f"<li{if s.yanked { " class=\"yanked\"" } else { "" }}><a class=\"st\" href=\"{href}\">{glyph(s.name, 34, "gl")}<span class=\"main\"><span class=\"nl\"><b class=\"nm\">{marked(s.name, terms)}</b>{gone}{matched}</span>{desc}</span><span class=\"ver\">{esc(s.vers)}</span>{when}</a></li>"
 }
 
 fn stone_rows(xs: List<Stone>, empty: str, dependents: bool = false) -> str {
     if xs.len() == 0 { return f"<p class=\"empty\">{esc(empty)}</p>"; }
     let b = StrBuf::new();
     b.push_str("<ul class=\"rows\">");
-    for s in xs { b.push_str(stone_row(s, if dependents { plural(s.rdeps.len(), "dependent", "dependents") } else { "" })); }
+    for s in xs { b.push_str(stone_row(row_of(s), if dependents { plural(s.rdeps.len(), "dependent", "dependents") } else { "" })); }
     b.push_str("</ul>");
     b.to_str()
 }
@@ -281,12 +422,87 @@ pub fn landing(site: Site, all: List<Stone>) -> str {
 "
 }
 
-pub fn all_stones(all: List<Stone>) -> str {
-    f"<div class=\"frame list-page\">
-<div class=\"page-head\"><h1 class=\"t-h2\" id=\"list-title\">All stones</h1><p class=\"t-small\" id=\"list-note\">{plural(all.len(), "stone", "stones")}, sorted by name.</p></div>
-{stone_rows(all, "No stones published yet.")}<p class=\"empty\" id=\"no-match\" hidden>Try a shorter word, or <a href=\"/stones\">browse all stones</a>.</p>
+/// Edit distance (insert, delete, substitute) between `a` and `b`.
+fn distance(a: str, b: str) -> usize {
+    let x: List<char> = List::new();
+    for c in a.chars() { x.push(c); }
+    let y: List<char> = List::new();
+    for c in b.chars() { y.push(c); }
+    let prev: List<usize> = List::new();
+    for j in 0..y.len() + 1 { prev.push(j); }
+    for i in 0..x.len() {
+        let cur: List<usize> = [i + 1];
+        for j in 0..y.len() {
+            let sub = prev[j] + (if x[i] == y[j] { 0 } else { 1 });
+            let best = if prev[j + 1] + 1 < cur[j] + 1 { prev[j + 1] + 1 } else { cur[j] + 1 };
+            cur.push(if sub < best { sub } else { best });
+        }
+        prev = cur;
+    }
+    prev[y.len()]
+}
+
+/// Up to three of `names` close to `name`: a few edits away, or one
+/// containing the other; nearest first.
+pub fn closest(names: List<str>, name: str) -> List<str> {
+    let q = name.to_lowercase();
+    let n = q.char_count();
+    let room = if n <= 3 { 1usize } else if n <= 6 { 2usize } else { 3usize };
+    let near: List<(usize, str)> = List::new();
+    for c in names {
+        let d = distance(q, c);
+        if d <= room || (n >= 3 && (c.contains(q) || q.contains(c))) { near.push((d, c)); }
+    }
+    near.sort_by(|a: (usize, str), b: (usize, str)| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+    let out: List<str> = List::new();
+    for (_d, c) in near {
+        if out.len() == 3 { break; }
+        out.push(c);
+    }
+    out
+}
+
+/// The sorts the stone list offers: value, label.
+const SORTS: [(str, str); 3] = [("relevance", "Relevance"), ("name", "Name"), ("updated", "Recently updated")];
+
+/// The stone list, `/stones`: every stone, or those matching `q`, in
+/// `sort` order. The page title and the body.
+pub fn list_page(rows: List<Row>, q: str, sort: str) -> (str, str) {
+    let q = q.trim();
+    let terms = terms_of(q);
+    // Without a query every row ties on relevance: that is name order.
+    let sort = if sort == "name" || sort == "updated" { sort } else if terms.is_empty() { "name" } else { "relevance" };
+    let hits = search(rows, q, sort);
+    let order = if sort == "updated" { "recently updated first" } else if sort == "name" { "sorted by name" } else { "best match first" };
+    let opts = StrBuf::new();
+    for (v, label) in SORTS {
+        if v == "relevance" && terms.is_empty() { continue; }
+        opts.push_str(f"<option value=\"{v}\"{if v == sort { " selected" } else { "" }}>{label}</option>");
+    }
+    let form = f"<form class=\"list-form\" role=\"search\" action=\"/stones\"><label class=\"sr-only\" for=\"list-q\">Search stones</label><input id=\"list-q\" class=\"field\" name=\"q\" type=\"search\" value=\"{esc(q)}\" placeholder=\"Search stones\" autocomplete=\"off\" spellcheck=\"false\"><label class=\"t-ui\" for=\"list-sort\">Sort</label><select id=\"list-sort\" class=\"field\" name=\"sort\">{opts.to_str()}</select><button class=\"btn-2 btn-sm\" type=\"submit\">Search</button></form>";
+    let qt = f"<q>{esc(q)}</q>";
+    let (title, note) = if terms.is_empty() {
+        ("All stones", f"{plural(rows.len(), "stone", "stones")}, {order}.")
+    } else if hits.is_empty() {
+        (f"Search: {q}", f"No stones match {qt}.")
+    } else {
+        (f"Search: {q}", f"{if hits.len() == 1 { "1 stone matches" } else { f"{grouped(hits.len())} stones match" }} {qt}, {order}. <a href=\"/stones\">Show all stones</a>")
+    };
+    let list = if hits.is_empty() {
+        if terms.is_empty() { "<p class=\"empty\">No stones published yet.</p>" } else { f"<p class=\"empty\">No stones match {qt}. Try a shorter word, or <a href=\"/stones\">see all stones</a>.</p>" }
+    } else {
+        let b = StrBuf::new();
+        b.push_str("<ul class=\"rows\">");
+        for h in hits { b.push_str(stone_row(h.row, "", terms, if terms.is_empty() { "" } else { h.why })); }
+        b.push_str("</ul>");
+        b.to_str()
+    };
+    (title, f"<div class=\"frame list-page\">
+<div class=\"page-head\"><h1 class=\"t-h2\">{esc(title)}</h1><p class=\"t-small\">{note}</p></div>
+{form}
+{list}
 </div>
-"
+")
 }
 
 /// Body of `publishing.html`: the guide in `pages/publishing.md`.
@@ -335,7 +551,12 @@ fn stone_head(s: Stone, tab: str) -> str {
     if !l.license.is_empty() { sum.push(esc(l.license)); }
     sum.push(plural(count_deps(l, "normal"), "dependency", "dependencies"));
     let about = if s.desc.is_empty() { "" } else { f"<p class=\"t-lead\">{esc(s.desc)}</p>" };
-    let notice = if l.yanked {
+    let home = esc(url(stone_out(s.name)));
+    let notice = if !s.at.is_empty() && s.at != s.top {
+        let which = if stones::cmp_vers(s.at, s.top) == Ordering::Less { "an old version" } else { "not the latest release" };
+        let gone = if l.yanked { " It is yanked: projects that pinned it keep building, new ones will not resolve it." } else { "" };
+        f"<p class=\"callout help\"><span class=\"lab\">{if l.yanked { "yanked" } else { "old version" }}</span><span>This is {which} of {esc(s.name)}; the latest is <a href=\"{home}\">{esc(s.top)}</a>.{gone}</span></p>"
+    } else if l.yanked {
         "<p class=\"callout help\"><span class=\"lab\">yanked</span><span>Every version is yanked. Projects that pinned one in <code class=\"ic\">rok.lock</code> keep building; new ones will not resolve this stone.</span></p>"
     } else { "" };
     // Narrow screens: install right under the title (the side panel ends up last).
@@ -349,15 +570,19 @@ fn stone_head(s: Stone, tab: str) -> str {
             f"<a href=\"{esc(href)}\">{label}{ct}</a>"
         }
     };
-    tabs.push_str(t("readme", "Readme", url(stone_out(s.name)), ""));
-    tabs.push_str(t("api", "API", url(tab_out(s.name, "api")), ""));
+    tabs.push_str(t("readme", "Readme", url(readme_out(s)), ""));
+    tabs.push_str(t("api", "API", url(api_out(s)), ""));
     tabs.push_str(t("versions", "Versions", url(tab_out(s.name, "versions")), f"{s.versions.len()}"));
-    tabs.push_str(t("dependencies", "Dependencies", url(tab_out(s.name, "dependencies")), f"{l.deps.len()}"));
-    tabs.push_str(t("dependents", "Dependents", url(tab_out(s.name, "dependents")), f"{s.rdeps.len()}"));
+    // A version page lists its dependencies in the side panel; these two
+    // tabs are the latest version's.
+    if s.at.is_empty() {
+        tabs.push_str(t("dependencies", "Dependencies", url(tab_out(s.name, "dependencies")), f"{l.deps.len()}"));
+        tabs.push_str(t("dependents", "Dependents", url(tab_out(s.name, "dependents")), f"{s.rdeps.len()}"));
+    }
     let tree = stones::tree_link(l.url, l.rev);
     if !tree.is_empty() { tabs.push_str(f"<a href=\"{esc(tree)}\">Source <span aria-hidden=\"true\">↗</span></a>"); }
     f"<div class=\"frame stone-head\">
-<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/stones\">stones</a> / {if tab == "readme" { esc(s.name) } else { f"<a href=\"{esc(url(stone_out(s.name)))}\">{esc(s.name)}</a> / {tab}" }}</nav>
+<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/stones\">stones</a> / {crumbs(s, tab)}</nav>
 <div class=\"title\"><span class=\"gl-box\" style=\"--h:{hue(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.vers)}</span></div>{about}</div></div>
 <p class=\"sum t-small\"><span>{sum.join("</span> · <span>")}</span></p>
 {notice}{inst}<div class=\"tabs-line\"><nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav></div>
@@ -365,14 +590,30 @@ fn stone_head(s: Stone, tab: str) -> str {
 "
 }
 
+/// The breadcrumb after `stones /`: the stone, the version, the tab;
+/// each but the last a link.
+fn crumbs(s: Stone, tab: str) -> str {
+    let parts: List<(str, str)> = [(esc(s.name), url(stone_out(s.name)))];
+    if !s.at.is_empty() { parts.push((esc(s.at), url(ver_out(s.name, s.at)))); }
+    if tab != "readme" { parts.push((tab, "")); }
+    let b: List<str> = List::new();
+    for k in 0..parts.len() {
+        let (text, href) = parts[k];
+        b.push(if k + 1 == parts.len() { text } else { f"<a href=\"{esc(href)}\">{text}</a>" });
+    }
+    b.join(" / ")
+}
+
 /// The install box: `rok add` and the `rok.rokon` line it writes, as tabs.
 /// `id` keeps the ids apart: the box is in the heading on narrow screens
 /// and in the side panel on wide ones.
 fn install_box(s: Stone, id: str) -> str {
     let l = s.latest;
-    if l.yanked { return "<p class=\"t-ui muted\">Not installable: every version is yanked.</p>"; }
-    let req = stones::add_req(l.vers);
-    let add = if stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
+    if l.yanked { return if s.at.is_empty() { "<p class=\"t-ui muted\">Not installable: every version is yanked.</p>" } else { "<p class=\"t-ui muted\">Not installable: this version is yanked.</p>" }; }
+    // An old version is asked for exactly.
+    let old = !s.at.is_empty() && s.at != s.top;
+    let req = if old { "=" + l.vers } else { stones::add_req(l.vers) };
+    let add = if old || stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
     // As `rok add` writes it into a multi-line rok.rokon.
     let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
     // From the stone's own API (apidoc::import_line), shown under both tabs.
@@ -393,7 +634,30 @@ fn side(site: Site, s: Stone) -> str {
     if !l.date.is_empty() { kv.push_str(f"<dt>Published</dt><dd><time datetime=\"{esc(l.date)}\">{esc(l.date)}</time></dd>"); }
     if !l.license.is_empty() { kv.push_str(f"<dt>License</dt><dd>{esc(l.license)}</dd>"); }
     let nd = count_deps(l, "normal");
-    kv.push_str(f"<dt>Dependencies</dt><dd>{if nd == 0 { "None" } else { f"<a href=\"{esc(url(tab_out(s.name, "dependencies")))}\">{nd}</a>" }}</dd>");
+    if nd == 0 {
+        kv.push_str("<dt>Dependencies</dt><dd>None</dd>");
+    } else if s.at.is_empty() {
+        kv.push_str(f"<dt>Dependencies</dt><dd><a href=\"{esc(url(tab_out(s.name, "dependencies")))}\">{nd}</a></dd>");
+    } else {
+        let ds: List<str> = List::new();
+        for d in l.deps {
+            if d.kind == "normal" { ds.push(f"<span class=\"mono\">{esc(d.name)} {esc(d.req)}</span>"); }
+        }
+        kv.push_str(f"<dt>Dependencies</dt><dd>{ds.join(", ")}</dd>");
+    }
+    let m = s.meta;
+    if !m.keywords.is_empty() {
+        let ks: List<str> = List::new();
+        for k in m.keywords { ks.push(f"<a href=\"/stones?q={esc(http::pct_encode(k))}\">{esc(k)}</a>"); }
+        kv.push_str(f"<dt>Keywords</dt><dd class=\"kws\">{ks.join(" ")}</dd>");
+    }
+    if !m.authors.is_empty() {
+        let au: List<str> = List::new();
+        for a in m.authors { au.push(esc(a)); }
+        kv.push_str(f"<dt>{if au.len() == 1 { "Author" } else { "Authors" }}</dt><dd>{au.join(", ")}</dd>");
+    }
+    if !m.homepage.is_empty() { kv.push_str(f"<dt>Homepage</dt><dd><a href=\"{esc(m.homepage)}\">{esc(bare(m.homepage))}</a></dd>"); }
+    if !m.documentation.is_empty() { kv.push_str(f"<dt>Documentation</dt><dd><a href=\"{esc(m.documentation)}\">{esc(bare(m.documentation))}</a></dd>"); }
     if let f: stones::Facts = s.facts {
         kv.push_str(f"<dt>Size</dt><dd>{size(f.bytes)} in {plural(f.files, "file", "files")}</dd>");
         if f.rok_files > 0 { kv.push_str(f"<dt>Rok code</dt><dd title=\"Lines that are not blank, in .rok files\">{plural(f.rok_lines, "line", "lines")} in {plural(f.rok_files, "file", "files")}</dd>"); }
@@ -404,10 +668,11 @@ fn side(site: Site, s: Stone) -> str {
     for v in vs {
         if k == 5 { break; }
         k += 1;
-        let mark = if v.vers == l.vers && !v.yanked { "<span class=\"dot\" title=\"latest\"></span>" } else { "<span class=\"dot off\"></span>" };
+        let mark = if v.vers == (if s.at.is_empty() { l.vers } else { s.top }) && !v.yanked { "<span class=\"dot\" title=\"latest\"></span>" } else { "<span class=\"dot off\"></span>" };
         let tag = if v.yanked { "<span class=\"tag\">yanked</span>" } else if stones::is_pre(v.vers) { "<span class=\"tag\">pre-release</span>" } else { "" };
         let when = if v.date.is_empty() { "" } else { f"<time class=\"c\" datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
-        vb.push_str(f"<li{if v.yanked { " class=\"yanked\"" } else { "" }}>{mark}<span class=\"v\">{esc(v.vers)}</span>{tag}{when}</li>");
+        let cur = if v.vers == s.at { " aria-current=\"page\"" } else { "" };
+        vb.push_str(f"<li{if v.yanked { " class=\"yanked\"" } else { "" }}>{mark}<a class=\"v\" href=\"{esc(url(ver_out(s.name, v.vers)))}\"{cur}>{esc(v.vers)}</a>{tag}{when}</li>");
     }
     let more = if s.versions.len() > 5 { f"<a href=\"{esc(url(tab_out(s.name, "versions")))}\" class=\"t-ui\">All {s.versions.len()} versions</a>" } else { "" };
     f"<aside class=\"meta\" aria-label=\"Stone details\">
@@ -416,6 +681,12 @@ fn side(site: Site, s: Stone) -> str {
 <section class=\"vers\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{dates_note(s)}{more}</section>
 </aside>
 "
+}
+
+/// `https://x.org/a/` as `x.org/a`.
+fn bare(u: str) -> str {
+    let t = u.strip_prefix("https://") ?? (u.strip_prefix("http://") ?? u);
+    t.strip_suffix("/") ?? t
 }
 
 /// What the version dates are, under a list that shows them.
@@ -478,10 +749,11 @@ pub fn versions_page(site: Site, s: Stone) -> str {
     for v in sorted_versions(s) {
         let tags = StrBuf::new();
         if v.vers == s.latest.vers && !v.yanked { tags.push_str("<span class=\"tag acc\">latest</span>"); }
+        let page = esc(url(ver_out(s.name, v.vers)));
         if v.yanked { tags.push_str("<span class=\"tag\">yanked</span>"); }
         if stones::is_pre(v.vers) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
         let when = if v.date.is_empty() { "<span class=\"muted\">unknown</span>" } else { f"<time datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
-        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><span class=\"v\">{esc(v.vers)}</span>{tags.to_str()}</td><td>{when}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.cksum)}\">{short(v.cksum)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
+        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><a class=\"v\" href=\"{page}\">{esc(v.vers)}</a>{tags.to_str()}</td><td>{when}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.cksum)}\">{short(v.cksum)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
     }
     let body = f"<h2 class=\"t-h3\">{plural(s.versions.len(), "version", "versions")}</h2>
 <p class=\"t-ui muted\">Newest first. Published is the date the version's line was added to the index. A yanked version stays in the index for the projects that pinned it; new resolves skip it.</p>
@@ -550,4 +822,36 @@ pub fn dependents_page(site: Site, s: Stone) -> str {
 pub fn not_found() -> str {
     let sentence = "There is no stone or page at <code id=\"lost-path\">this address</code>. Search with <kbd class=\"kbd\">/</kbd>, or go to:";
     f"<div class=\"frame lost-page\">{chrome::not_found("Page not found", sentence, [("/stones", "All stones"), ("/publishing", "Publishing"), ("/", "rokstones home")])}</div>\n"
+}
+
+#[cfg(test)]
+fn row(name: str, desc: str, kws: List<str>, time: i64) -> Row {
+    Row { name: name, vers: "0.1.0", desc: desc, keywords: kws, yanked: false, time: time, date: "" }
+}
+
+#[test]
+fn searching() {
+    let rows = [row("json5", "JSON5 reader", List::new(), 3i64), row("json", "JSON values", List::new(), 1i64), row("geom", "2D shapes", ["geometry"], 2i64), row("ajson", "another json", List::new(), 4i64)];
+    let names = |hs: List<Hit>| {
+        let out: List<str> = List::new();
+        for h in hs { out.push(h.row.name); }
+        out.join(",")
+    };
+    assert(names(search(rows, "json", "relevance")) == "json,json5,ajson", "relevance");
+    assert(names(search(rows, "json", "name")) == "ajson,json,json5", "name");
+    assert(names(search(rows, "json", "updated")) == "ajson,json5,json", "updated");
+    assert(names(search(rows, "geometry", "")) == "geom" && search(rows, "geometry", "")[0].why == "keywords", "keywords");
+    assert(search(rows, "json xml", "").is_empty() && search(rows, "", "").len() == 4, "every term");
+    assert(marked("A <json> JSON", ["json"]) == "A &lt;<mark>json</mark>&gt; <mark>JSON</mark>", "marks");
+    let (title, body) = list_page(rows, "nope", "");
+    assert(title == "Search: nope" && body.contains("No stones match <q>nope</q>") && body.contains("href=\"/stones\""), "no match");
+    assert(list_page(rows, "", "updated").1.contains("<option value=\"updated\" selected>"), "sort kept");
+}
+
+#[test]
+fn near_names() {
+    let names = ["json", "json5", "toml", "http", "markdown"];
+    assert(closest(names, "jsno").join(",") == "json,json5", closest(names, "jsno").join(","));
+    assert(closest(names, "mark").join(",") == "markdown", "contained");
+    assert(closest(names, "zzzzzz").is_empty(), "nothing near");
 }
