@@ -42,6 +42,9 @@ pub struct Site {
     pub playground: str = "https://playground.rok-lang.org";
     /// The toolchain release the footer names (`rok 0.1.4`).
     pub release: str = "";
+    /// Whether anyone may log in and publish. While it is not, the header
+    /// has no login button and stones come in by pull request to the index.
+    pub publishing: bool = false;
     /// README cache (git objects and extracted READMEs).
     pub cache: str = ".cache";
     pub out: str = "public";

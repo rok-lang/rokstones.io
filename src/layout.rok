@@ -151,7 +151,7 @@ fn footer(site: Site) -> str {
             ("Learn", f"<a href=\"{d}/learn\">Guide</a><a href=\"{d}/examples\">Examples</a><a href=\"{esc(site.playground)}\">Playground</a>"),
             ("Reference", f"<a href=\"{d}/spec\">Language spec</a><a href=\"{d}/std\">Std library</a><a href=\"{d}/learn/16-tools\">Tools</a>"),
             ("Ecosystem", f"<a href=\"/\">Stones</a><a href=\"/publishing\">Publishing</a><a href=\"{esc(site.index_repo)}\">Index repository</a><a href=\"{gh}/rok.vscode\">VS Code</a><a href=\"{gh}/rok.vim\">Vim</a>"),
-            ("Project", f"<a href=\"{esc(site.home)}/roadmap\">Roadmap</a><a href=\"{gh}\">GitHub</a><a href=\"{gh}/rok/security/policy\">Security</a><a href=\"{gh}/rok/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a>"),
+            ("Project", f"<a href=\"{esc(site.home)}/roadmap\">Roadmap</a><a href=\"{gh}\">GitHub</a><a href=\"{gh}/rok/blob/main/SECURITY.md\">Security</a><a href=\"{gh}/rok/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a>"),
         ],
         sites: chrome::Sites { home: site.home, docs: site.docs + "/latest", stones: "/", playground: site.playground, current: "stones" },
         release: site.release,
@@ -175,12 +175,13 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
     let browse = cur(out == "stones/index.html" || out.starts_with("stones/"));
     let publish = cur(out == "publishing.html");
     // The server's own pages (`me`, `me/..`) belong to a logged-in account.
+    // While publishing is closed only admins log in, at /login directly.
     let mine = out == "me" || out.starts_with("me/");
     let account = if mine {
-        f"<a class=\"btn-2 btn-sm login\" href=\"/me\" aria-current=\"page\">Account</a>"
-    } else {
-        f"<a class=\"btn-2 btn-sm login\" href=\"/login\">Log in<span class=\"wide\"> with GitHub</span></a>"
-    };
+        f"<a class=\"btn-2 btn-sm login\" href=\"/me\" aria-current=\"page\">Account</a>\n"
+    } else if site.publishing {
+        f"<a class=\"btn-2 btn-sm login\" href=\"/login\">Log in<span class=\"wide\"> with GitHub</span></a>\n"
+    } else { "" };
     f"<!doctype html>
 <html lang=\"en\" class=\"rk lt\">
 <head>
