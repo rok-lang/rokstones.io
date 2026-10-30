@@ -8,9 +8,14 @@
     index ? Promise.resolve(index)
       : fetch(root + "search-index.json").then((r) => r.json()).then((d) => (index = d));
 
-  // Theme: localStorage.theme is "light" or "dark"; unset follows the system.
+  // Theme: "light" or "dark" in the theme cookie and localStorage.theme;
+  // neither follows the system. theme.js reads them in the same order.
   const dark = matchMedia("(prefers-color-scheme: dark)");
-  const stored = () => { try { return localStorage.getItem("theme"); } catch { return null; } };
+  const stored = () => {
+    const c = (document.cookie.match(/(?:^|; )theme=(light|dark)(?:;|$)/) || [])[1];
+    if (c) return c;
+    try { return localStorage.getItem("theme"); } catch { return null; }
+  };
   const tb = document.querySelector(".theme");
   const seg = document.querySelectorAll(".seg button");
   const apply = () => {
@@ -20,12 +25,16 @@
     html.classList.toggle("lt", !d);
     if (tb) {
       tb.setAttribute("aria-pressed", d ? "true" : "false");
-      tb.title = d ? "Dark theme on" : "Dark theme off";
+      tb.setAttribute("aria-label", d ? "Switch to light theme" : "Switch to dark theme");
+      tb.title = tb.getAttribute("aria-label");
     }
     const cur = s === "light" || s === "dark" ? s : "system";
     seg.forEach((b) => b.setAttribute("aria-pressed", b.dataset.theme === cur ? "true" : "false"));
   };
   const choose = (t) => {
+    const keep = t === "system" ? "Max-Age=0" : "Max-Age=31536000";
+    const secure = location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `theme=${t === "system" ? "" : t}; Path=/; ${keep}; SameSite=Lax${secure}`;
     try { t === "system" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); } catch {}
     apply();
   };
