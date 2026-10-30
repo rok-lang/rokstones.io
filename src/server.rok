@@ -673,8 +673,11 @@ fn handle(s: TcpStream, cfg: Cfg, site: Site) {
     eprintln(f"{r.method} {r.path} {resp.status} {t0.elapsed().as_ms()}ms");
 }
 
-/// Rebuild the site whenever `STALE` is set, one build at a time.
-fn rebuild_loop(index_dir: str) {
+/// Rebuild the site whenever `STALE` is set, one build at a time. Where
+/// og/node_modules is installed, draw the new cards with og/render.mjs
+/// and build again so the pages point at them; elsewhere they keep the
+/// site card until a deploy draws them.
+fn rebuild_loop(index_dir: str, out: str) {
     let exe = try env::current_exe() catch e {
         eprintln(f"cannot find this program to rebuild the site: {e}");
         return;
@@ -685,7 +688,24 @@ fn rebuild_loop(index_dir: str) {
                 eprintln(f"site rebuild: {e}");
                 continue;
             };
-            if !st.success() { eprintln(f"site rebuild: {st}"); }
+            if !st.success() {
+                eprintln(f"site rebuild: {st}");
+                continue;
+            }
+            if !fs::exists("og/node_modules") { continue; }
+            let r = try Command::new("node").args(["og/render.mjs", out, "og/manifest.tsv"]).status() catch e {
+                eprintln(f"og cards: node: {e}");
+                continue;
+            };
+            if !r.success() {
+                eprintln(f"og cards: {r}");
+                continue;
+            }
+            let again = try Command::new(exe.as_str()).args(["--index", index_dir]).status() catch e {
+                eprintln(f"site rebuild: {e}");
+                continue;
+            };
+            if !again.success() { eprintln(f"site rebuild: {again}"); }
         }
         thread::sleep(Duration::sec(1));
     }
@@ -701,8 +721,9 @@ pub fn serve(site: Site) throws {
         eprintln(f"serving {site.out}/ and the API on http://{cfg.addr} for {cfg.url}");
         STALE.store(1);
         let ix = cfg.index;
+        let out = site.out;
         let bg = thread::spawn(|| {
-            rebuild_loop(ix);
+            rebuild_loop(ix, out);
             0
         });
         bg.detach();

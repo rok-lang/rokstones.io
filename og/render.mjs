@@ -4,6 +4,7 @@
 // the home card has no name), which the site build writes. Each card gets
 // a <png>.v naming the card version it was drawn from: the server caches
 // og.png?v=<that> for good, and rebuilds keep the card while it matches.
+// A card whose .v already matches is skipped; delete the .v to redraw it.
 //   node render.mjs [outDir=../public] [manifest=./manifest.tsv]
 import puppeteer from "puppeteer-core";
 import { readFileSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
@@ -52,13 +53,16 @@ if (existsSync(manifestPath)) {
 if (!cards.some((c) => c.out === join(outDir, "og.png"))) cards.unshift({ out: join(outDir, "og.png"), v: "", html: read("home.html") });
 
 mkdirSync(join(outDir, "og"), { recursive: true });
+const drawn = (c) => c.v && existsSync(c.out) && existsSync(c.out + ".v") && readFileSync(c.out + ".v", "utf8").trim() === c.v;
+const todo = cards.filter((c) => !drawn(c));
+if (!todo.length) process.exit(0);
 const browser = await puppeteer.launch({
   executablePath: chrome(), headless: true,
   args: ["--no-sandbox", "--force-color-profile=srgb", "--hide-scrollbars"],
 });
 const tmp = join(here, "_render.html");
 try {
-  for (const c of cards) {
+  for (const c of todo) {
     writeFileSync(tmp, c.html);
     const page = await browser.newPage();
     await page.setViewport({ width: 1200, height: 630, deviceScaleFactor: 2 });

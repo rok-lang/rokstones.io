@@ -198,6 +198,9 @@ expect_body 'Published { name: "geom", vers: "0.1.0", file: "ge/om/geom" }' "pub
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Publish geom 0.1.0" ] || fail "pushed commit"
 [ "$(git -C "$T/remote.git" log -1 --format='%an <%ae>')" = "alice <1001+alice@users.noreply.github.com>" ] || fail "commit author"
 [ "$(git -C "$T/remote.git" show HEAD:ge/om/geom)" = "$line" ] || fail "index line"
+# The rebuild draws no card (no og/node_modules): the page gets the site card.
+for _ in $(seq 50); do [ -f "$T/site/public/stones/geom.html" ] && break; sleep 0.1; done
+grep -q 'property="og:image" content="[^"]*/og.png?v=[0-9a-f]\{10\}"' "$T/site/public/stones/geom.html" || fail "undrawn card falls back to og.png"
 req POST /api/v1/publish "${auth[@]}" --data-binary "$line"
 expect_code 409 "republish"
 req POST /api/v1/publish "${auth[@]}" --data-binary "${line//\"geom\"/\"ge-om\"}"

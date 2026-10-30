@@ -76,6 +76,14 @@ fn og_inputs(tpl: str) throws -> Digest {
     d
 }
 
+/// Whether the live site has `card` drawn at version `v`: its `.v` matches.
+fn drawn(site: Site, card: str, v: str) -> bool {
+    let f = site.out + "/" + card;
+    if !fs::exists(f) { return false; }
+    let got = try fs::read_to_str(f + ".v") catch _ { "" };
+    got.trim() == v
+}
+
 /// A card's version: the first 10 hex digits of its inputs' SHA-256. It
 /// changes exactly when the rendered card would, so a new card gets a
 /// new URL and link previews refetch it.
@@ -280,8 +288,10 @@ fn main() throws {
     for s in all {
         let out = layout::stone_out(s.name);
         let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a Rok stone" } else { s.desc };
-        let og = site.base_url + "/og/" + s.name + ".png?v=" + og_v[s.name];
-        let alt = f"{s.name} {s.latest.vers}: {about}";
+        // Until render.mjs draws this card, link previews get the site card.
+        let (og, alt) = if drawn(site, "og/" + s.name + ".png", og_v[s.name]) {
+            (site.base_url + "/og/" + s.name + ".png?v=" + og_v[s.name], f"{s.name} {s.latest.vers}: {about}")
+        } else { ("", "") };
         files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s), og, alt));
         let vo = layout::tab_out(s.name, "versions");
         files.insert(vo, layout::page_desc(site, vo, f"Versions of {s.name}", about, layout::versions_page(site, s), og, alt));
@@ -334,8 +344,8 @@ fn main() throws {
     let cards: List<(str, str)> = [("og.png", site.og)];
     for s in all { cards.push(("og/" + s.name + ".png", og_v[s.name])); }
     for (card, v) in cards {
+        if !drawn(site, card, v) { continue; }
         let from = site.out + "/" + card;
-        if !fs::exists(from + ".v") || (try fs::read_to_str(from + ".v")).trim() != v { continue; }
         try fs::create_dir_all(dir_of(out_root + "/" + card));
         try fs::copy(from, out_root + "/" + card);
         try fs::copy(from + ".v", out_root + "/" + card + ".v");
