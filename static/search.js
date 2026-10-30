@@ -247,7 +247,8 @@
     document.addEventListener("keydown", (ev) => {
       const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
       const slash = ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey;
-      const k = ev.key.toLowerCase() === "k" && (ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey;
+      // ev.code too: with Caps Lock or a Korean IME the key is "K" or "ㅏ".
+      const k = (ev.code === "KeyK" || ev.key.toLowerCase() === "k") && (ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey;
       if (slash || k) { ev.preventDefault(); q.focus(); q.select(); }
     });
 
