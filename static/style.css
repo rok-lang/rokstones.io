@@ -15,11 +15,12 @@ button{font:inherit}
 .hdr .in{position:relative}
 .hdr .brand img{display:block}
 .hdr .search{flex:1 1 300px;max-width:520px;height:38px;cursor:text;position:relative;margin:0}
-.search .q{border:0;outline:0;flex:1;min-width:0;font:inherit;font-size:14px;background:transparent;color:var(--ink);padding:0;height:100%}
+.search .q{border:0;outline:0;flex:1;min-width:0;font-family:inherit;background:transparent;color:var(--ink);padding:0;height:100%}
 .search .q::placeholder{color:var(--ink-3)}
 .search .q::-webkit-search-cancel-button{display:none}
 .search:focus-within{border-color:var(--ink-3)}
 .search:focus-within .kbd{display:none}
+@media (min-width:768px){.search .q{font-size:14px}}
 .hdr .nav{margin-left:auto}
 .nav a[aria-current]{color:var(--ink);font-weight:500}
 .theme .sun,.dk .theme .moon{display:none}
@@ -186,7 +187,8 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
 .acct h2{margin-top:16px}
 .acct form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .acct label{display:flex;gap:10px;align-items:center;font-size:14px}
-.acct input:not([type=hidden]){height:34px;padding:0 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px}
+.acct input:not([type=hidden]){height:34px;padding:0 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink);font-family:inherit}
+@media (min-width:768px){.acct input:not([type=hidden]){font-size:14px}}
 .acct .callout{flex-direction:column}
 .acct pre{font-size:13px;overflow-x:auto}
 
