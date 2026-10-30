@@ -80,28 +80,30 @@
     fig.append(bar, pre);
   }
 
-  // Install box: tabs plus a copy button per panel.
-  const tabs = [...document.querySelectorAll(".itabs [role=tab]")];
+  // Install boxes: tabs plus a copy button per panel.
   for (const p of document.querySelectorAll(".ipanel")) {
     const pre = p.querySelector("pre");
     p.append(copyButton(() => pre.innerText.replace(/^\$ /, ""), "copy"));
   }
-  const pick = (t, focus) => {
-    for (const x of tabs) {
-      const on = x === t;
-      x.setAttribute("aria-selected", on ? "true" : "false");
-      x.tabIndex = on ? 0 : -1;
-      document.getElementById(x.getAttribute("aria-controls")).classList.toggle("on", on);
-    }
-    if (focus) t.focus();
-  };
-  tabs.forEach((t, k) => {
-    t.addEventListener("click", () => pick(t, false));
-    t.addEventListener("keydown", (e) => {
-      const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-      if (d) { e.preventDefault(); pick(tabs[(k + d + tabs.length) % tabs.length], true); }
+  for (const box of document.querySelectorAll(".inst")) {
+    const tabs = [...box.querySelectorAll(".itabs [role=tab]")];
+    const pick = (t, focus) => {
+      for (const x of tabs) {
+        const on = x === t;
+        x.setAttribute("aria-selected", on ? "true" : "false");
+        x.tabIndex = on ? 0 : -1;
+        document.getElementById(x.getAttribute("aria-controls")).classList.toggle("on", on);
+      }
+      if (focus) t.focus();
+    };
+    tabs.forEach((t, k) => {
+      t.addEventListener("click", () => pick(t, false));
+      t.addEventListener("keydown", (e) => {
+        const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (d) { e.preventDefault(); pick(tabs[(k + d + tabs.length) % tabs.length], true); }
+      });
     });
-  });
+  }
 
   // 404.html: name the missing path.
   const lost = document.getElementById("lost-path");

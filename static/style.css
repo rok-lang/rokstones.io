@@ -100,6 +100,7 @@ pre.cmd{border:1px solid var(--line);border-radius:6px;background:var(--code);fo
 .facts .bad{color:var(--acc)}
 .stone-head .callout{max-width:720px}
 .stone-head .tabs{margin-top:10px}
+.inst-head{display:none}
 .tabs a:hover{color:var(--ink);text-decoration:none}
 .stone-body{display:grid;grid-template-columns:minmax(0,1fr) 340px}
 .stone-body>.main{padding:32px 40px 72px 0;min-width:0;display:flex;flex-direction:column;gap:16px}
@@ -220,6 +221,8 @@ html:not(.js) .ipanel+.ipanel{border-top:1px solid var(--line)}
   .stone-body{grid-template-columns:minmax(0,1fr)}
   .stone-body>.main{padding-right:0}
   .meta{border-left:0;border-top:1px solid var(--line);padding:28px 0 56px}
+  .inst-head{display:block;max-width:560px}
+  .inst-side{display:none!important}
   .ftr .cols{grid-template-columns:repeat(4,minmax(0,1fr))}
   .ftr .about{grid-column:1/-1}
 }

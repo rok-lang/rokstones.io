@@ -315,6 +315,8 @@ fn stone_head(out: str, s: Stone, tab: str) -> str {
     let notice = if l.yanked {
         "<p class=\"callout help\"><span class=\"lab\">yanked</span><span>Every version is yanked. Projects that pinned one in <code class=\"ic\">rok.lock</code> keep building; new ones will not resolve this stone.</span></p>"
     } else { "" };
+    // Narrow screens: install right under the title (the side panel ends up last).
+    let inst = if l.yanked { "" } else { f"<section class=\"inst-head\" aria-label=\"Install\">{install_box(s, "h")}</section>\n" };
     let tabs = StrBuf::new();
     let t = |key: str, label: str, href: str, n: str| {
         let ct = if n.is_empty() { "" } else { f"<span class=\"ct\">{n}</span>" };
@@ -334,27 +336,31 @@ fn stone_head(out: str, s: Stone, tab: str) -> str {
 <nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"{r}stones/index.html\">stones</a> / {if tab == "readme" { esc(s.name) } else { f"<a href=\"{esc(r + stone_out(s.name))}\">{esc(s.name)}</a> / {tab}" }}</nav>
 <div class=\"title\"><span class=\"gl-box\" style=\"--h:{hue(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.vers)}</span></div>{about}</div></div>
 <ul class=\"facts\">{facts.to_str()}</ul>
-{notice}<nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav>
+{notice}{inst}<nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav>
 </div>
 "
+}
+
+/// The install box: `rok add` and the `rok.rokon` line it writes, as tabs.
+/// `id` keeps the ids apart: the box is in the heading on narrow screens
+/// and in the side panel on wide ones.
+fn install_box(s: Stone, id: str) -> str {
+    let l = s.latest;
+    if l.yanked { return "<p class=\"t-ui muted\">Not installable: every version is yanked.</p>"; }
+    let req = stones::add_req(l.vers);
+    let add = if stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
+    // As `rok add` writes it into a multi-line rok.rokon.
+    let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
+    f"<div class=\"inst\">
+<div class=\"itabs\" role=\"tablist\" aria-label=\"Install with\"><button type=\"button\" role=\"tab\" id=\"{id}t-add\" aria-controls=\"{id}p-add\" aria-selected=\"true\">rok add</button><button type=\"button\" role=\"tab\" id=\"{id}t-rokon\" aria-controls=\"{id}p-rokon\" aria-selected=\"false\" tabindex=\"-1\">rok.rokon</button></div>
+<div class=\"ipanel on\" role=\"tabpanel\" id=\"{id}p-add\" aria-labelledby=\"{id}t-add\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>{esc(add)}</code></pre></div>
+<div class=\"ipanel\" role=\"tabpanel\" id=\"{id}p-rokon\" aria-labelledby=\"{id}t-rokon\"><pre><code class=\"language-rokon\">{rok_syntax::highlight_rokon(manifest)}</code></pre></div>
+</div>"
 }
 
 fn side(site: Site, out: str, s: Stone) -> str {
     let l = s.latest;
     let r = root_of(out);
-    let req = stones::add_req(l.vers);
-    let add = if stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
-    // As `rok add` writes it into a multi-line rok.rokon.
-    let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
-    let install = if l.yanked {
-        "<p class=\"t-ui muted\">Not installable: every version is yanked.</p>"
-    } else {
-        f"<div class=\"inst\">
-<div class=\"itabs\" role=\"tablist\" aria-label=\"Install with\"><button type=\"button\" role=\"tab\" id=\"it-add\" aria-controls=\"ip-add\" aria-selected=\"true\">rok add</button><button type=\"button\" role=\"tab\" id=\"it-rokon\" aria-controls=\"ip-rokon\" aria-selected=\"false\" tabindex=\"-1\">rok.rokon</button></div>
-<div class=\"ipanel on\" role=\"tabpanel\" id=\"ip-add\" aria-labelledby=\"it-add\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>{esc(add)}</code></pre></div>
-<div class=\"ipanel\" role=\"tabpanel\" id=\"ip-rokon\" aria-labelledby=\"it-rokon\"><pre><code class=\"language-rokon\">{rok_syntax::highlight_rokon(manifest)}</code></pre></div>
-</div>"
-    };
     let repo = stones::web_of(l.url);
     let shown = esc(l.url.replace("https://", "").strip_suffix(".git") ?? l.url.replace("https://", "")).replace("/", "/<wbr>");
     let repo_html = if repo.is_empty() { f"<code>{shown}</code>" } else { f"<a href=\"{esc(repo)}\">{shown}</a>" };
@@ -371,7 +377,7 @@ fn side(site: Site, out: str, s: Stone) -> str {
     }
     let more = if s.versions.len() > 5 { f"<a href=\"{esc(r + tab_out(s.name, "versions"))}\" class=\"t-ui\">All {s.versions.len()} versions</a>" } else { "" };
     f"<aside class=\"meta\" aria-label=\"Stone details\">
-<section><h2 class=\"t-label\">Install</h2>{install}</section>
+<section class=\"inst-side\"><h2 class=\"t-label\">Install</h2>{install_box(s, "i")}</section>
 <dl class=\"kv\"><dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd class=\"mono\">{commit_link(l)}</dd><dt>Tree hash</dt><dd class=\"mono\"><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd>{lic}<dt>Index file</dt><dd class=\"mono\"><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\">{esc(s.file)}</a></dd></dl>
 <section class=\"vers\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{more}</section>
 </aside>
