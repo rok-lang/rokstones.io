@@ -7,7 +7,6 @@ Site {
     index_repo: "https://github.com/rok-lang/rokstones.io-index",
     base_url: "https://rokstones.io",
     docs: "https://docs.rok-lang.org",
-    release: "0.1.4",
     cache: ".cache",
     out: "public",
 }

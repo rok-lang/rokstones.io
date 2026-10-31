@@ -17,6 +17,8 @@ mod apidoc;
 
 use rok::std::env;
 use rok::std::fs;
+use rok::std::process;
+use rok::std::process::{Command, Stdio};
 use rok::std::rokon;
 use rok::core::crypto::HashAlgorithm;
 use rok::core::crypto::sha2::Digest;
@@ -40,7 +42,8 @@ pub struct Site {
     /// The language's home site.
     pub home: str = "https://rok-lang.org";
     pub playground: str = "https://playground.rok-lang.org";
-    /// The toolchain release the footer names (`rok 0.1.4`).
+    /// The toolchain release the footer names (`rok 0.1.6`): when it is
+    /// not set, the rokc on PATH's (the server has none; the deploy sets it).
     pub release: str = "";
     /// Whether anyone may log in and publish. While it is not, the header
     /// has no login button and stones come in by pull request to the index.
@@ -61,12 +64,23 @@ pub struct Site {
 /// site.rokon, with the home card's version and size.
 fn load_site() throws -> Site {
     let site: Site = try rokon::from_str(try fs::read_to_str("site.rokon"));
+    if site.release.is_empty() { site.release = rokc_release(); }
     site.og = og_version(try og_inputs("home.html"), "");
     let (w, h) = try png_size("static/og.png");
     site.og_w = w;
     site.og_h = h;
     site.assets = try asset_versions();
     site
+}
+
+/// `0.1.6` from the rokc on PATH (`rokc 0.1.6 (d0c8492ae 2026-11-01)`),
+/// or "" without one.
+fn rokc_release() -> str {
+    let o = try Command::new("rokc").args(["--version"]).stdin(Stdio::Null).output() catch _ { return ""; };
+    let w = (try? str::from_utf8(o.stdout)) ?? "";
+    let parts: List<str> = List::new();
+    for x in w.split_whitespace() { parts.push(x); }
+    if o.status.success() && parts.len() > 1 { parts[1] } else { "" }
 }
 
 /// The first 10 hex digits of the SHA-256 of each `.css` and `.js` the
@@ -296,7 +310,7 @@ fn main() throws {
             index_arg = args[i];
         } else {
             eprintln(f"unknown argument `{a}` (check, --demo, --offline, --index <dir>)");
-            env::exit(2);
+            process::exit(2);
         }
         i += 1;
     }
@@ -306,7 +320,7 @@ fn main() throws {
     dir = dir.strip_suffix("/") ?? dir;
     if !fs::exists(dir) {
         eprintln(f"error: no index at {dir} (site.rokon `index`, or --demo)");
-        env::exit(1);
+        process::exit(1);
     }
     let readmes = stones::Readmes { cache: site.cache, fixed: if demo { "fixtures/readme" } else { "" }, fixed_src: if demo { "fixtures/src" } else { "" }, offline: offline };
     let idx = stones::load(dir, readmes);
@@ -436,7 +450,7 @@ fn main() throws {
         if !s.readme.is_empty() { readme_n += 1; }
     }
     println(f"{dir}: {all.len()} stones ({readme_n} with README), {idx.errors.len()} index errors → {out_root}/ ({files.len()} html), {bad.len()} broken links, {t0.elapsed():?}");
-    if strict && (bad.len() > 0 || idx.errors.len() > 0) { env::exit(1); }
+    if strict && (bad.len() > 0 || idx.errors.len() > 0) { process::exit(1); }
 }
 
 #[test]

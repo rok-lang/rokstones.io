@@ -769,7 +769,7 @@ fn read_page(site: Site, path: str, file: str) -> List<u8> | none {
 
 fn handle(s: TcpStream, cfg: Cfg, site: Site) {
     let t0 = Instant::now();
-    let r = try http::read_request(s, http::MAX_BODY, Duration::sec(30)) catch e {
+    let r = try http::read_request(s, http::MAX_BODY, Duration::secs(30)) catch e {
         try http::send(s, e.status, ["Content-Type: text/plain; charset=utf-8"], e.msg + "\n", false) catch _ {};
         s.close();
         return;
@@ -866,7 +866,7 @@ fn rebuild_loop(index_dir: str, out: str) {
             };
             if !again.success() { eprintln(f"site rebuild: {again}"); }
         }
-        thread::sleep(Duration::sec(1));
+        thread::sleep(Duration::secs(1));
     }
 }
 
