@@ -1,9 +1,10 @@
 Package {
     name: "rokstones_io",
     version: "0.1.0",
+    toolchain: "0.2",
     deps: {
-        "markdown": "0.1",
-        "rok-syntax": "0.1",
+        "markdown": "0.2",
+        "rok-syntax": "0.2",
         "web": Dep::path("web/rok"),
     },
 }

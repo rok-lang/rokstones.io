@@ -233,14 +233,14 @@ pub fn add_req(v: str) -> str {
     if is_pre(v) { "=" + v } else { "^" + v }
 }
 
-fn get_str(f: OrderedDict<str, Value>, k: str) -> str | none {
+fn get_str(f: Dict<str, Value>, k: str) -> str | none {
     if let v: Value = f.get(k) {
         if let Value::Str(s) = v { return s; }
     }
     none
 }
 
-fn fields_of(v: Value, name: str) -> OrderedDict<str, Value> | none {
+fn fields_of(v: Value, name: str) -> Dict<str, Value> | none {
     if let Value::Struct { name: n, fields } = v {
         if n is none || (n ?? "") == name { return fields; }
     }
@@ -264,8 +264,8 @@ impl Error for LineError {}
 fn bad(msg: str) -> LineError { LineError { msg: msg } }
 
 fn parse_req(v: Value) throws (LineError) -> Req {
-    let f: OrderedDict<str, Value> = OrderedDict::new();
-    if let x: OrderedDict<str, Value> = fields_of(v, "") { f = x; } else { throw bad("a dependency is `{ name: .., req: .., kind: .. }`"); }
+    let f: Dict<str, Value> = Dict::new();
+    if let x: Dict<str, Value> = fields_of(v, "") { f = x; } else { throw bad("a dependency is `{ name: .., req: .., kind: .. }`"); }
     let name = get_str(f, "name") ?? "";
     if !is_name(name) { throw bad(f"bad dependency name `{name}`"); }
     let kind = get_str(f, "kind") ?? "normal";
@@ -276,8 +276,8 @@ fn parse_req(v: Value) throws (LineError) -> Req {
 /// One index line: the stone's name and the version.
 pub fn parse_line(line: str) throws (LineError) -> (str, Version) {
     let v = try rokon::parse(line) catch e { throw bad(f"{e}"); };
-    let f: OrderedDict<str, Value> = OrderedDict::new();
-    if let x: OrderedDict<str, Value> = fields_of(v, "Stone") { f = x; } else { throw bad("not a `Stone { .. }`"); }
+    let f: Dict<str, Value> = Dict::new();
+    if let x: Dict<str, Value> = fields_of(v, "Stone") { f = x; } else { throw bad("not a `Stone { .. }`"); }
     let name = get_str(f, "name") ?? "";
     if !is_name(name) { throw bad(f"bad name `{name}`"); }
     let vers = get_str(f, "vers") ?? "";
@@ -430,7 +430,7 @@ fn tree_of_stone(r: Readmes, name: str, url: str, rev: str) -> Tree | none {
 fn tree_files(t: Tree) -> List<(str, i64)> {
     let out: List<(str, i64)> = List::new();
     if !t.dir.is_empty() {
-        for entry in fs::walk(t.dir) {
+        for entry in fs::walk(t.dir).results() {
             let e = try entry.get() catch _ { continue; };
             if !e.is_file() { continue; }
             let size = try fs::metadata(e.path()) catch _ { continue; };
@@ -605,7 +605,7 @@ fn again(s: Stone) -> Stone {
     Stone { name: s.name, file: s.file, versions: s.versions, latest: s.latest, time: s.time, date: s.date, readme: s.readme, desc: s.desc, rdeps: s.rdeps, facts: s.facts, api: s.api, api_none: s.api_none, import: s.import, meta: s.meta }
 }
 
-fn str_list(f: OrderedDict<str, Value>, k: str) -> List<str> {
+fn str_list(f: Dict<str, Value>, k: str) -> List<str> {
     let out: List<str> = List::new();
     if let Value::List(xs) = f.get(k) ?? Value::None {
         for x in xs {
@@ -660,7 +660,7 @@ pub fn load(dir: str, r: Readmes) -> Index {
     let errors: List<str> = List::new();
     let by_name: Dict<str, List<Version>> = Dict::new();
     let files: Dict<str, str> = Dict::new();
-    for entry in fs::walk(dir) {
+    for entry in fs::walk(dir).results() {
         let e = try entry.get() catch err {
             errors.push(f"{err}");
             continue;

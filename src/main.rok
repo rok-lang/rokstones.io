@@ -22,12 +22,12 @@ use rok::std::process::{Command, Stdio};
 use rok::std::rokon;
 use rok::core::crypto::HashAlgorithm;
 use rok::core::crypto::sha2::Digest;
-use rok::core::task::time::Instant;
 use layout::dir_of;
 use web::kit;
 use web::url;
 
 #[derive(Rokon)]
+#[rokon(deny_unknown_fields)]
 pub struct Site {
     pub title: str;
     pub tagline: str;
@@ -96,8 +96,7 @@ fn asset_versions() throws -> str {
         out.push_str(f"{name}={secret::hex(d.finish()[0:5])},");
     };
     for f in kit::files(kit::Mark::Rokstones) { put(f.name, f.data); }
-    for entry in fs::walk("static") {
-        let e = try entry.get();
+    try for e in fs::walk("static") {
         if !e.is_file() { continue; }
         let b = try fs::read(e.path());
         put(e.path().as_str()["static/".len():], b[0:b.len()]);
@@ -120,7 +119,7 @@ fn og_inputs(tpl: str) throws -> Digest {
     // A missing input only changes the version, so its pages fall back to
     // the site card; it must never stop the server.
     if fs::exists("og/fonts") {
-        for entry in fs::walk("og/fonts") {
+        for entry in fs::walk("og/fonts").results() {
             let e = try entry.get() catch _ { continue; };
             if e.is_file() { files.push(e.path().as_str()); }
         }
@@ -157,7 +156,7 @@ pub fn og_version(inputs: Digest, text: str) -> str {
 /// Width and height from a PNG's IHDR chunk.
 fn png_size(path: str) throws -> (i64, i64) {
     let b = try fs::read(path);
-    if b.len() < 24 { throw ValueError { msg: f"{path}: not a PNG" }; }
+    if b.len() < 24 { throw ValueError::new(f"{path}: not a PNG"); }
     let be = |k: usize| ((b[k] as i64) << 24) | ((b[k + 1] as i64) << 16) | ((b[k + 2] as i64) << 8) | (b[k + 3] as i64);
     (be(16), be(20))
 }
@@ -405,7 +404,7 @@ fn main() throws {
     try write(out_root, "sitemap.xml", map.to_str());
     try write(out_root, "robots.txt", f"User-agent: *\nDisallow: /me\nSitemap: {site.base_url}/sitemap.xml\n");
     try write(out_root, "search-index.json", sx.to_str());
-    try write(out_root, ".stones.rokon", rokon::to_string(rows) + "\n");
+    try write(out_root, ".stones.rokon", (try rokon::to_str(rows)) + "\n");
     let statics: Set<str> = Set::new();
     statics.insert("search-index.json");
     // Served by `serve`, not files.
@@ -417,8 +416,7 @@ fn main() throws {
         statics.insert(f.name);
     }
     for name in try kit::copy_fonts(kit::FONTS_DIR, out_root + "/fonts") { statics.insert("fonts/" + name); }
-    for entry in fs::walk("static") {
-        let e = try entry.get();
+    try for e in fs::walk("static") {
         if !e.is_file() { continue; }
         let name = e.path().as_str()["static/".len():];
         try fs::copy(e.path(), out_root + "/" + name);

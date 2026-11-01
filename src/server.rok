@@ -12,12 +12,9 @@ use rok::std::net;
 use rok::std::net::TcpStream;
 use rok::std::rokon;
 use rok::std::rokon::Value;
-use rok::std::rokon::write;
 use rok::std::process::{Command, Stdio, ChildStdin, ChildStdout};
 use rok::std::thread;
-use rok::std::io::byte_buf;
-use rok::std::time::{Duration, SystemTime};
-use rok::core::task::time::Instant;
+use rok::std::time::SystemTime;
 use markdown::esc;
 use pkg::Site;
 use pkg::layout;
@@ -163,10 +160,10 @@ fn save_db(cfg: Cfg, db: Db) throws {
         if s.expires > now { live.push(s); }
     }
     db.sessions = live;
-    try fs::write_atomic(db_path(cfg), rokon::to_string(db) + "\n");
+    try fs::write_atomic(db_path(cfg), (try rokon::to_str(db)) + "\n");
 }
 
-fn now_secs() -> i64 { try SystemTime::now().unix_seconds() catch _ { 0i64 } }
+fn now_secs() -> i64 { SystemTime::now().unix_secs() }
 
 fn account(db: Db, id: i64) -> Account | none {
     for a in db.accounts {
@@ -256,12 +253,13 @@ fn redirect(to: str, cookies: List<str>) -> Resp {
 }
 
 fn rokon_resp(status: i32, name: str, fields: List<(str, Value)>) -> Resp {
-    let f: OrderedDict<str, Value> = OrderedDict::new();
+    let f: Dict<str, Value> = Dict::new();
     for (k, v) in fields { f.insert(k, v); }
     Resp {
         status: status,
         headers: ["Content-Type: application/rokon; charset=utf-8", "Cache-Control: no-store"],
-        body: write::flat(Value::Struct { name: name, fields: f }) + "\n",
+        // Strings and bools only: nothing that has no ROKON form.
+        body: (try! rokon::to_str_flat(Value::Struct { name: name, fields: f })) + "\n",
         file: "",
     }
 }
@@ -310,7 +308,7 @@ fn curl(config: str) throws (ApiError) -> str {
     let full = config + "silent\nshow-error\nfail\nmax-time = 20\n";
     let w = c.stdin;
     if w is ChildStdin {
-        try w.write_str(full) catch _ {};
+        try w.write_all(full) catch _ {};
         try w.close() catch _ {};
     }
     let out = "";
@@ -347,7 +345,7 @@ pub fn json_fields(s: str) -> Dict<str, str> {
                 let e = cs[j];
                 if e == 'n' { b.push('\n'); } else if e == 't' { b.push('\t'); } else if e == 'r' { b.push('\r'); } else if e == 'b' || e == 'f' { b.push(' '); } else if e == 'u' && j + 4 < n {
                     let code = 0u32;
-                    for q in 1usize..5usize { code = code * 16u32 + (try cs[j + q].to_digit(16u32) catch _ { 0u32 }); }
+                    for q in 1usize..5usize { code = code * 16u32 + (cs[j + q].to_digit(16u32) ?? 0u32); }
                     b.push(char::from_u32(code) ?? '\u{fffd}');
                     j += 4;
                 } else { b.push(e); }
@@ -569,6 +567,7 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
 }
 
 #[derive(Rokon)]
+#[rokon(deny_unknown_fields)]
 pub struct Yank {
     pub name: str;
     pub vers: str;
@@ -770,7 +769,7 @@ fn handle(s: TcpStream, cfg: Cfg, site: Site) {
     let t0 = Instant::now();
     let r = try http::read_request(s, http::MAX_BODY, Duration::secs(30)) catch e {
         try http::send(s, e.status, ["Content-Type: text/plain; charset=utf-8"], e.msg + "\n", false) catch _ {};
-        s.close();
+        try s.close() catch _ {};
         return;
     };
     let resp = try route(cfg, site, r) catch e {
@@ -789,7 +788,7 @@ fn handle(s: TcpStream, cfg: Cfg, site: Site) {
     } else {
         sent = respond(s, r, resp.status, resp.headers, resp.body.as_bytes().to_list());
     }
-    s.close();
+    try s.close() catch _ {};
     // The path only: queries carry OAuth codes.
     eprintln(f"{r.method} {r.path} {sent} {t0.elapsed().as_ms()}ms");
 }
@@ -875,7 +874,7 @@ pub fn serve(site: Site) throws {
     if !fs::exists(cfg.index + "/.git") { throw ApiError { status: 0, msg: f"ROKSTONES_INDEX={cfg.index} is not a git checkout" }; }
     try fs::create_dir_all(cfg.data);
     // Fail now on a bad data file, not on the first request.
-    try load_db(cfg);
+    _ = try load_db(cfg);
     using l = try net::tcp_listen(cfg.addr) {
         eprintln(f"serving {site.out}/ and the API on http://{cfg.addr} for {cfg.url}");
         STALE.store(1);
@@ -886,7 +885,7 @@ pub fn serve(site: Site) throws {
             0
         });
         bg.detach();
-        for c in l.incoming() {
+        for c in l.incoming().results() {
             let s = try c.get() catch e {
                 eprintln(f"accept: {e}");
                 continue;
@@ -897,9 +896,9 @@ pub fn serve(site: Site) throws {
                 // unread data resets it, and a proxy that sees the reset
                 // before the answer reports a 502 instead of this 503.
                 try s.set_read_timeout(Duration::ms(20)) catch _ {};
-                try s.read(byte_buf(16384)) catch _ { 0usize };
+                _ = try s.read(secret::zeros(16384)) catch _ { 0usize };
                 try http::send(s, 503, ["Content-Type: text/plain; charset=utf-8", "Retry-After: 1"], "busy\n", false) catch _ {};
-                s.close();
+                try s.close() catch _ {};
                 continue;
             }
             let t = thread::spawn(|| {
@@ -934,7 +933,7 @@ fn ownership_and_tokens() {
     let t = "rks_" + "ab".repeat(32);
     let db = Db { accounts: List::new(), sessions: List::new(), tokens: [Token { id: "1", name: "n", account: 1i64, hash: secret::sha256_hex(t), created: 0i64, last_used: 0i64 }], owners: List::new() };
     expect(token_of(db, t) is Token && token_of(db, t.replace("rks_a", "rks_b")) is none && token_of(db, "ab".repeat(34)) is none, "lookup");
-    let back: Db = try rokon::from_str(rokon::to_string(db)) catch e { panic(f"{e}"); };
+    let back: Db = try rokon::from_str(try! rokon::to_str(db)) catch e { panic(f"{e}"); };
     expect(back.tokens.len() == 1 && back.tokens[0].hash == db.tokens[0].hash, "data file round trip");
     expect(date(0i64) == "never" && date(1700000000i64) == "2023-11-14" && date(951782400i64) == "2000-02-29", "dates");
 }

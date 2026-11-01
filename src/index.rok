@@ -6,7 +6,6 @@
 use rok::std::fs;
 use rok::std::rokon;
 use rok::std::rokon::Value;
-use rok::std::rokon::write;
 use rok::std::process::Command;
 use rok::core::cmp::Ordering;
 use pkg::stones;
@@ -144,20 +143,20 @@ pub struct Entry {
     pub line: str;
 }
 
-fn record(v: Value, want: str) -> OrderedDict<str, Value> | none {
+fn record(v: Value, want: str) -> Dict<str, Value> | none {
     if let Value::Struct { name: n, fields } = v {
         if (n ?? "") == want { return fields; }
     }
     none
 }
 
-fn only(f: OrderedDict<str, Value>, allowed: List<str>, what: str) throws (ApiError) {
+fn only(f: Dict<str, Value>, allowed: List<str>, what: str) throws (ApiError) {
     for k in f.keys() {
         if !allowed.contains(k) { throw bad(f"{what}: unknown field `{k}`"); }
     }
 }
 
-fn str_field(f: OrderedDict<str, Value>, k: str, what: str) throws (ApiError) -> str {
+fn str_field(f: Dict<str, Value>, k: str, what: str) throws (ApiError) -> str {
     if let v: Value = f.get(k) {
         if let Value::Str(s) = v { return s; }
         throw bad(f"{what}: `{k}` is a string");
@@ -165,12 +164,12 @@ fn str_field(f: OrderedDict<str, Value>, k: str, what: str) throws (ApiError) ->
     throw bad(f"{what}: no `{k}`");
 }
 
-fn opt_str(f: OrderedDict<str, Value>, k: str, what: str) throws (ApiError) -> str | none {
+fn opt_str(f: Dict<str, Value>, k: str, what: str) throws (ApiError) -> str | none {
     if f.contains_key(k) { return try str_field(f, k, what); }
     none
 }
 
-fn not_yanked(f: OrderedDict<str, Value>, what: str) throws (ApiError) {
+fn not_yanked(f: Dict<str, Value>, what: str) throws (ApiError) {
     if let v: Value = f.get("yanked") {
         if v != Value::Bool(false) { throw bad(f"{what}: a new version has `yanked: false`"); }
     }
@@ -180,7 +179,7 @@ fn https(url: str) -> bool {
     url.starts_with("https://") && url.len() > 8 && !url.contains(" ") && !url.contains("\"")
 }
 
-fn opt_bool(f: OrderedDict<str, Value>, k: str) throws (ApiError) -> bool {
+fn opt_bool(f: Dict<str, Value>, k: str) throws (ApiError) -> bool {
     match f.get(k) {
         v: Value => {
             let Value::Bool(b) = v else { throw bad(f"`{k}` is true or false"); };
@@ -218,7 +217,7 @@ fn str_list(v: Value, what: str) throws (ApiError) -> List<str> {
 /// name -> optional), as the client's manifest check does.
 fn check_features(v: Value, normal: Dict<str, bool>) throws (ApiError) {
     let Value::Dict(d) = v else { throw bad("`features` is a dict of name → list"); };
-    let table: OrderedDict<str, List<str>> = OrderedDict::new();
+    let table: Dict<str, List<str>> = Dict::new();
     for k in d.keys() {
         let Value::Str(name) = k else { throw bad("a feature name is a string"); };
         if !is_feature(name) { throw bad(f"`{name}` is not a feature name"); }
@@ -256,7 +255,7 @@ fn check_features(v: Value, normal: Dict<str, bool>) throws (ApiError) {
     }
 }
 
-fn no_cycle(table: OrderedDict<str, List<str>>, name: str, state: Dict<str, i32>) throws (ApiError) {
+fn no_cycle(table: Dict<str, List<str>>, name: str, state: Dict<str, i32>) throws (ApiError) {
     let s = state.get(name) ?? 0;
     if s == 2 { return; }
     if s == 1 { throw bad(f"features form a cycle through `{name}`"); }
@@ -269,12 +268,12 @@ fn no_cycle(table: OrderedDict<str, List<str>>, name: str, state: Dict<str, i32>
 
 const META: [str; 3] = ["description", "license", "repository"];
 
-fn check_meta(f: OrderedDict<str, Value>, what: str) throws (ApiError) {
-    for k in META { try opt_str(f, k, what); }
+fn check_meta(f: Dict<str, Value>, what: str) throws (ApiError) {
+    for k in META { _ = try opt_str(f, k, what); }
 }
 
 /// A `Stone { .. }` line, checked.
-fn check_stone(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
+fn check_stone(f: Dict<str, Value>) throws (ApiError) -> (str, str) {
     try only(f, ["name", "vers", "deps", "features", "source", "cksum", "yanked", "description", "license", "repository"], "Stone");
     // Normal dependencies: whether each is optional.
     let normal: Dict<str, bool> = Dict::new();
@@ -285,7 +284,7 @@ fn check_stone(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
     if let d: Value = f.get("deps") {
         let Value::List(xs) = d else { throw bad("`deps` is a list"); };
         for x in xs {
-            let q = record(x, "") ?? (record(x, "Req") ?? OrderedDict::new());
+            let q = record(x, "") ?? (record(x, "Req") ?? Dict::new());
             if q.len() == 0 { throw bad("a dependency is `{ name: .., req: .., kind: .. }`"); }
             try only(q, ["name", "req", "kind", "registry", "optional", "features", "default_features"], "dependency");
             let dn = try str_field(q, "name", "dependency");
@@ -294,14 +293,14 @@ fn check_stone(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
             if !is_req(req) { throw bad(f"`{req}` is not a version requirement"); }
             let kind = (try opt_str(q, "kind", "dependency")) ?? "normal";
             if kind != "normal" && kind != "dev" && kind != "native" { throw bad("`kind` is \"normal\", \"dev\" or \"native\""); }
-            try opt_str(q, "registry", "dependency");
+            _ = try opt_str(q, "registry", "dependency");
             let opt = try opt_bool(q, "optional");
             if opt && kind != "normal" { throw bad(f"`{dn}`: only a normal dependency is optional"); }
             if let fv: Value = q.get("features") {
                 if kind == "native" { throw bad(f"`{dn}`: a native package has no features"); }
-                try str_list(fv, f"`{dn}` features");
+                _ = try str_list(fv, f"`{dn}` features");
             }
-            try opt_bool(q, "default_features");
+            _ = try opt_bool(q, "default_features");
             if kind == "normal" { normal.insert(dn, opt); }
         }
     }
@@ -328,7 +327,7 @@ fn check_stone(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
 
 /// A `Native { .. }` value, checked: every build an https archive with
 /// its SHA-256, dependencies on indexed native packages only.
-fn check_native(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
+fn check_native(f: Dict<str, Value>) throws (ApiError) -> (str, str) {
     try only(f, ["name", "vers", "deps", "targets", "yanked", "description", "license", "repository"], "Native");
     let name = try str_field(f, "name", "Native");
     try check_name(name, "native package");
@@ -344,7 +343,7 @@ fn check_native(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
             seen.insert(key(dn));
             let v = xs[k];
             let req = "";
-            let named: OrderedDict<str, Value> = OrderedDict::new();
+            let named: Dict<str, Value> = Dict::new();
             if let Value::Str(r) = v {
                 req = r;
             } else if let Value::Variant { path, args, named: n } = v {
@@ -356,14 +355,14 @@ fn check_native(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
             }
             if !is_req(req) { throw bad(f"`{req}` is not a version requirement"); }
             try only(named, ["registry"], "Dep::native");
-            try opt_str(named, "registry", "Dep::native");
+            _ = try opt_str(named, "registry", "Dep::native");
         }
     }
     let Value::Dict(ts) = f.get("targets") ?? Value::None else { throw bad("`targets` is a dict of target triple -> Artifact"); };
     if ts.len() == 0 { throw bad(f"native package `{name}` has no `targets`"); }
     for t in ts.keys() {
         let Value::Str(triple) = t else { throw bad("a target is a string"); };
-        let a = record(ts[t], "Artifact") ?? OrderedDict::new();
+        let a = record(ts[t], "Artifact") ?? Dict::new();
         if a.len() == 0 { throw bad(f"{triple}: a build is `Artifact {{ .. }}`"); }
         try only(a, ["url", "sha256", "links", "runtime"], "Artifact");
         let url = try str_field(a, "url", "Artifact");
@@ -394,16 +393,21 @@ fn check_native(f: OrderedDict<str, Value>) throws (ApiError) -> (str, str) {
     (name, vers)
 }
 
+/// `v` on one line, as the client writes an index line.
+fn flat(v: Value) throws (ApiError) -> str {
+    try rokon::to_str_flat(v) catch e { throw bad(f"not writable as ROKON: {e}"); }
+}
+
 /// A publish body (`Stone { .. }` or `Native { .. }`), checked on its own.
 pub fn parse_entry(body: str) throws (ApiError) -> Entry {
     let v = try rokon::parse(body) catch e { throw bad(f"not ROKON: {e}"); };
-    if let f: OrderedDict<str, Value> = record(v, "Stone") {
+    if let f: Dict<str, Value> = record(v, "Stone") {
         let (name, vers) = try check_stone(f);
-        return Entry { name: name, vers: vers, native: false, file: stones::shard(name), line: write::flat(v) };
+        return Entry { name: name, vers: vers, native: false, file: stones::shard(name), line: try flat(v) };
     }
-    if let f: OrderedDict<str, Value> = record(v, "Native") {
+    if let f: Dict<str, Value> = record(v, "Native") {
         let (name, vers) = try check_native(f);
-        return Entry { name: name, vers: vers, native: true, file: "native/" + stones::shard(name), line: write::flat(v) };
+        return Entry { name: name, vers: vers, native: true, file: "native/" + stones::shard(name), line: try flat(v) };
     }
     throw bad("the body is a `Stone { .. }` or `Native { .. }` index entry");
 }
@@ -426,16 +430,16 @@ fn git(dir: str, args: List<str>, status: i32) throws (ApiError) -> str {
 
 /// Make the checkout its upstream's state; before every write.
 pub fn sync(dir: str) throws (ApiError) {
-    try git(dir, ["fetch", "-q", "origin"], 503);
-    try git(dir, ["reset", "-q", "--hard", "@{u}"], 500);
+    _ = try git(dir, ["fetch", "-q", "origin"], 503);
+    _ = try git(dir, ["reset", "-q", "--hard", "@{u}"], 500);
 }
 
 /// Commit `rel` as `who`, push; on a failed push, back to upstream and 503.
 fn commit_push(dir: str, rel: str, msg: str, who: str) throws (ApiError) {
-    try git(dir, ["add", "--", rel], 500);
-    try git(dir, ["-c", "user.name=rokstones.io", "-c", "user.email=index@rokstones.io", "commit", "-q", "--no-gpg-sign", f"--author={who}", "-m", msg, "--", rel], 500);
-    try git(dir, ["push", "-q", "origin", "HEAD"], 503) catch e {
-        try git(dir, ["reset", "-q", "--hard", "@{u}"], 500) catch _ {};
+    _ = try git(dir, ["add", "--", rel], 500);
+    _ = try git(dir, ["-c", "user.name=rokstones.io", "-c", "user.email=index@rokstones.io", "commit", "-q", "--no-gpg-sign", f"--author={who}", "-m", msg, "--", rel], 500);
+    _ = try git(dir, ["push", "-q", "origin", "HEAD"], 503) catch e {
+        _ = try git(dir, ["reset", "-q", "--hard", "@{u}"], 500) catch _ { "" };
         throw e;
     };
 }
@@ -541,7 +545,7 @@ pub fn yank(dir: str, name: str, vers: str, yanked: bool, native: bool, who: str
                     fields.insert("yanked", Value::Bool(yanked));
                     changed = true;
                 }
-                out.push_str(write::flat(Value::Struct { name: n, fields: fields }) + "\n");
+                out.push_str((try flat(Value::Struct { name: n, fields: fields })) + "\n");
             }
         }
         if !hit { out.push_str(line + "\n"); }

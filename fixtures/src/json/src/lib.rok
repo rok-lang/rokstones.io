@@ -14,7 +14,7 @@ pub enum Value {
     Float(f64),
     Str(str),
     Array(List<Value>),
-    Object(OrderedDict<str, Value>),
+    Object(Dict<str, Value>),
 }
 
 impl Value {
