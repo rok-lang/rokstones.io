@@ -31,6 +31,15 @@ pub struct Meta {
     /// The native library it links, from the index entry.
     pub links: str = "";
     pub default_run: str = "";
+    /// Whether it has a library target, and its binaries; `none` / empty:
+    /// not sent.
+    pub has_lib: bool | none = none;
+    pub bin_names: List<str> = List::new();
+    /// Bytes of the packed stone, as `rok publish` packed it.
+    pub size: i64 | none = none;
+    /// Keys this server does not know, kept as sent (`{ .. }`); `none`:
+    /// there were none. Shown with the rest, never checked.
+    pub extra: Value = Value::None;
 }
 
 pub fn empty() -> Meta { try! rokon::from_str("Meta {}") }
@@ -54,7 +63,17 @@ pub struct Release {
     pub published_by: Actor | none;
     pub yanked_by: Actor | none;
     pub unyanked_by: Actor | none;
+    /// Why it was yanked (`Yank { message }`); `""` when not given or
+    /// unyanked.
+    pub yank_message: str = "";
+    /// Downloads counted by the server. Stones are fetched from their git
+    /// source, not from here, so nothing counts them yet.
+    pub downloads: i64 = 0i64;
 }
+
+/// Where the README sent with version `version` of `k` (`index::key`,
+/// `native/` prefixed) is kept under the data directory.
+pub fn readme_file(data: str, k: str, version: str) -> str { f"{data}/readme/{k}/{version}.md" }
 
 fn given(v: Value) -> bool {
     match v {
@@ -65,12 +84,18 @@ fn given(v: Value) -> bool {
     }
 }
 
-/// `m` as a record of the fields it has, for the API.
+/// `m` as a record of the fields it has, for the API; the unknown keys
+/// it was sent follow the known ones.
 pub fn to_value(m: Meta) -> Value {
     let out: OrderedDict<str, Value> = OrderedDict::new();
     if let Value::Struct { name: _, fields } = rokon::encode(m) {
         for (k, v) in fields {
-            if given(v) { out.insert(k, v); }
+            if k != "extra" && given(v) { out.insert(k, v); }
+        }
+    }
+    if let Value::Struct { name: _, fields } = m.extra {
+        for (k, v) in fields {
+            if !out.contains_key(k) { out.insert(k, v); }
         }
     }
     Value::Struct { name: none, fields: out }
@@ -112,5 +137,15 @@ fn records() {
     let back: Release = try rokon::from_str(rokon::to_string(r)) catch e { panic(f"{e}"); };
     expect(back.meta.license == "MIT" && back.yanked_by is none, "round trip");
     let old: Release = try rokon::from_str("Release { name: \"x\", version: \"1.0.0\", meta: Meta {} }") catch e { panic(f"{e}"); };
-    expect(old.published_by is none && old.meta.description.is_empty(), "defaults");
+    expect(old.published_by is none && old.meta.description.is_empty() && old.meta.size is none && old.downloads == 0i64, "defaults");
+    let x = empty();
+    x.has_lib = true;
+    x.size = 1234i64;
+    let ex: OrderedDict<str, Value> = OrderedDict::new();
+    ex.insert("msrv_note", Value::Str("n"));
+    x.extra = Value::Struct { name: none, fields: ex };
+    let xf = rokon::write::flat(to_value(x));
+    expect(xf == "{ has_lib: true, size: 1234, msrv_note: \"n\" }", xf);
+    let xb: Meta = try rokon::from_str(rokon::to_string(x)) catch e { panic(f"{e}"); };
+    expect((xb.size ?? 0i64) == 1234i64 && xb.extra == x.extra, "extra round trip");
 }

@@ -594,7 +594,11 @@ pub struct Yank {
     pub version: str;
     pub undo: bool = false;
     pub native: bool = false;
+    /// Why; kept with the version until it is unyanked.
+    pub message: str = "";
 }
+
+const YANK_MESSAGE_MAX: usize = 512;
 
 fn api_route(cfg: Cfg, r: Request) -> Resp {
     let out = api_error(500, "internal error");
@@ -612,13 +616,14 @@ fn actor_value(a: Actor | none) -> Value {
 }
 
 /// `GET /api/v1/stones/<name>` and `/api/v1/native/<name>`: the owners,
-/// and each version in the index with its metadata and who published,
-/// yanked and unyanked it. No token needed.
+/// and each version in the index with its dependencies (as the index
+/// line has them), metadata, README presence, downloads and who
+/// published, yanked and unyanked it. No token needed.
 fn stone_info(cfg: Cfg, db: Db, native: bool, name: str) throws (ApiError) -> Resp {
     if !stones::is_name(name) { throw index::err(404, f"`{name}` is not a stone name"); }
     let k = (if native { "native/" } else { "" }) + index::key(name);
-    let vs = try index::releases(cfg.index, native, name);
-    if vs.is_empty() { throw index::err(404, f"{if native { "native package" } else { "stone" }} `{name}` is not in the index"); }
+    let lines = try index::lines_for(cfg.index, native, name);
+    if lines.is_empty() { throw index::err(404, f"{if native { "native package" } else { "stone" }} `{name}` is not in the index"); }
     let owners: List<Value> = List::new();
     for id in owners_of(db, k) ?? List::new() {
         let a = account(db, id) ?? Account { id: id, login: "", created: 0i64 };
@@ -628,7 +633,9 @@ fn stone_info(cfg: Cfg, db: Db, native: bool, name: str) throws (ApiError) -> Re
         owners.push(Value::Struct { name: none, fields: f });
     }
     let list: List<Value> = List::new();
-    for (v, yanked) in vs {
+    for line in lines {
+        let v = if let Value::Str(x) = line.get("version") ?? Value::None { x } else { "" };
+        let yanked = line.get("yanked") == Value::Bool(true);
         let rel = Release { name: k, version: v, meta: meta::empty(), published_by: none, yanked_by: none, unyanked_by: none };
         for r in db.releases {
             if r.name == k && r.version == v { rel = r; }
@@ -636,7 +643,11 @@ fn stone_info(cfg: Cfg, db: Db, native: bool, name: str) throws (ApiError) -> Re
         let f: OrderedDict<str, Value> = OrderedDict::new();
         f.insert("version", Value::Str(v));
         f.insert("yanked", Value::Bool(yanked));
+        f.insert("yank_message", if yanked && !rel.yank_message.is_empty() { Value::Str(rel.yank_message) } else { Value::None });
+        f.insert("deps", line.get("deps") ?? (if native { Value::Dict(OrderedDict::new()) } else { Value::List(List::new()) }));
         f.insert("meta", meta::to_value(rel.meta));
+        f.insert("has_readme", Value::Bool(fs::exists(meta::readme_file(cfg.data, k, v))));
+        f.insert("downloads", Value::Int(Int::from(rel.downloads)));
         f.insert("published_by", actor_value(rel.published_by));
         f.insert("yanked_by", actor_value(rel.yanked_by));
         f.insert("unyanked_by", actor_value(rel.unyanked_by));
@@ -645,12 +656,28 @@ fn stone_info(cfg: Cfg, db: Db, native: bool, name: str) throws (ApiError) -> Re
     rokon_resp(200, "Stone", [("name", Value::Str(name)), ("native", Value::Bool(native)), ("owners", Value::List(owners)), ("versions", Value::List(list))])
 }
 
+/// `GET /api/v1/stones/<name>/<version>/readme`: the README text sent
+/// with that version, as Markdown.
+fn readme_of(cfg: Cfg, native: bool, name: str, version: str) throws (ApiError) -> Resp {
+    if !stones::is_name(name) || !index::is_version(version) { throw index::err(404, "no such stone version"); }
+    let k = (if native { "native/" } else { "" }) + index::key(name);
+    let p = meta::readme_file(cfg.data, k, version);
+    if !fs::exists(p) { throw index::err(404, f"{name} {version} was published without a README"); }
+    let text = try fs::read_to_str(p) catch e { throw index::err(500, f"readme: {e}"); };
+    Resp { status: 200, headers: ["Content-Type: text/markdown; charset=utf-8", "Cache-Control: public, max-age=60"], body: text, file: "" }
+}
+
 fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     for (prefix, native) in [("/api/v1/stones/", false), ("/api/v1/native/", true)] {
-        if let name: str = r.path.strip_prefix(prefix) {
-            if r.method != "GET" && r.method != "HEAD" { throw index::err(405, f"use GET {prefix}<name>"); }
+        if let rest: str = r.path.strip_prefix(prefix) {
+            let parts: List<str> = List::new();
+            for x in rest.split("/") { parts.push(http::pct_decode(x, false) ?? x); }
+            let what = if parts.len() == 3 { f"{prefix}<name>/<version>/readme" } else { f"{prefix}<name>" };
+            if r.method != "GET" && r.method != "HEAD" { throw index::err(405, f"use GET {what}"); }
+            if parts.len() == 3 && parts[2] == "readme" { return try readme_of(cfg, native, parts[0], parts[1]); }
+            if parts.len() != 1 { throw index::err(404, "no such API route"); }
             let db = try load_db(cfg) catch e { throw index::err(500, f"data: {e}"); };
-            return try stone_info(cfg, db, native, http::pct_decode(name, false) ?? name);
+            return try stone_info(cfg, db, native, parts[0]);
         }
     }
     let routes: List<(str, str)> = [("GET", "/api/v1/me"), ("POST", "/api/v1/publish"), ("POST", "/api/v1/yank")];
@@ -688,20 +715,35 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
         try index::check_source(cfg.data + "/sources", e);
         try index::publish(cfg.index, e, who);
         if owners is none { db.owners.push(Owner { name: k, accounts: [a.id] }); }
+        if !p.readme.is_empty() {
+            let rp = meta::readme_file(cfg.data, k, e.version);
+            try {
+                fs::create_dir_all(layout::dir_of(rp));
+                fs::write(rp, p.readme);
+            } catch x { eprintln(f"readme: {x}"); };
+        }
         let i = release_at(db, k, e.version);
         db.releases[i].meta = p.meta;
         db.releases[i].published_by = by;
         try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
         STALE.store(1);
-        return rokon_resp(200, "Published", [("name", Value::Str(e.name)), ("version", Value::Str(e.version)), ("file", Value::Str(e.file))]);
+        let warnings: List<Value> = List::new();
+        for w in p.warnings { warnings.push(Value::Str(w)); }
+        return rokon_resp(200, "Published", [("name", Value::Str(e.name)), ("version", Value::Str(e.version)), ("file", Value::Str(e.file)), ("warnings", Value::List(warnings))]);
     }
-    let y: Yank = try rokon::from_str(r.body) catch e { throw index::err(400, f"the body is `Yank {{ name: .., version: .., undo: false, native: false }}`: {e}"); };
+    let y: Yank = try rokon::from_str(r.body) catch e { throw index::err(400, f"the body is `Yank {{ name: .., version: .., undo: false, native: false, message: \"..\" }}`: {e}"); };
+    if y.message.len() > YANK_MESSAGE_MAX { throw index::err(400, f"a yank message is at most {YANK_MESSAGE_MAX} bytes"); }
+    if y.undo && !y.message.is_empty() { throw index::err(400, "an unyank takes no message"); }
     let k = (if y.native { "native/" } else { "" }) + index::key(y.name);
     if !may_publish(owners_of(db, k), true, a.id, admin) { throw index::err(403, f"`{y.name}` belongs to other accounts"); }
     let changed = try index::yank(cfg.index, y.name, y.version, !y.undo, y.native, who);
-    if changed {
+    // Yanking a yanked version again only replaces its message.
+    if changed || (!y.undo && !y.message.is_empty()) {
         let i = release_at(db, k, y.version);
-        if y.undo { db.releases[i].unyanked_by = by; } else { db.releases[i].yanked_by = by; }
+        if changed {
+            if y.undo { db.releases[i].unyanked_by = by; } else { db.releases[i].yanked_by = by; }
+        }
+        db.releases[i].yank_message = y.message;
         try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
         STALE.store(1);
     }

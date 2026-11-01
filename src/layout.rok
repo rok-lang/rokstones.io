@@ -555,7 +555,8 @@ fn stone_head(s: Stone, tab: str) -> str {
     let notice = if !s.at.is_empty() && s.at != s.top {
         let which = if stones::cmp_vers(s.at, s.top) == Ordering::Less { "an old version" } else { "not the latest release" };
         let who = if l.yanked_by.is_empty() { "" } else { f" by {esc(l.yanked_by)}" };
-        let gone = if l.yanked { f" It is yanked{who}: projects that pinned it keep building, new ones will not resolve it." } else { "" };
+        let why = if l.yank_message.is_empty() { "" } else { f" Reason: {esc(l.yank_message)}." };
+        let gone = if l.yanked { f" It is yanked{who}: projects that pinned it keep building, new ones will not resolve it.{why}" } else { "" };
         f"<p class=\"callout help\"><span class=\"lab\">{if l.yanked { "yanked" } else { "old version" }}</span><span>This is {which} of {esc(s.name)}; the latest is <a href=\"{home}\">{esc(s.top)}</a>.{gone}</span></p>"
     } else if l.yanked {
         "<p class=\"callout help\"><span class=\"lab\">yanked</span><span>Every version is yanked. Projects that pinned one in <code class=\"ic\">rok.lock</code> keep building; new ones will not resolve this stone.</span></p>"
@@ -659,7 +660,7 @@ fn side(site: Site, s: Stone) -> str {
     } else {
         let ds: List<str> = List::new();
         for d in l.deps {
-            if d.kind == "normal" { ds.push(f"<span class=\"mono\">{esc(d.name)} {esc(d.req)}</span>"); }
+            if d.kind == "normal" { ds.push(f"<span class=\"mono\">{esc(stones::real(d))} {esc(d.req)}</span>"); }
         }
         kv.push_str(f"<dt>Dependencies</dt><dd>{ds.join(", ")}</dd>");
     }
@@ -773,7 +774,8 @@ pub fn versions_page(site: Site, s: Stone) -> str {
         if v.version == s.latest.version && !v.yanked { tags.push_str("<span class=\"tag acc\">latest</span>"); }
         let page = esc(url(ver_out(s.name, v.version)));
         if v.yanked {
-            let by = if v.yanked_by.is_empty() { "" } else { f" title=\"yanked by {esc(v.yanked_by)}\"" };
+            let why = if v.yank_message.is_empty() { "" } else { f": {v.yank_message}" };
+            let by = if v.yanked_by.is_empty() && why.is_empty() { "" } else { f" title=\"yanked{if v.yanked_by.is_empty() { "" } else { f" by {v.yanked_by}" }}{why}\"" };
             tags.push_str(f"<span class=\"tag\"{by}>yanked</span>");
         }
         if stones::is_pre(v.version) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
@@ -792,14 +794,17 @@ fn dep_rows(have: Set<str>, deps: List<stones::Req>, kind: str) -> str {
     let b = StrBuf::new();
     for d in deps {
         if d.kind != kind { continue; }
+        let dn = stones::real(d);
         let name = if !d.registry.is_empty() {
-            f"<span class=\"mono\">{esc(d.name)}</span> <span class=\"tag\" title=\"{esc(d.registry)}\">other index</span>"
-        } else if have.contains(d.name) {
-            f"<a class=\"mono\" href=\"{esc(url(stone_out(d.name)))}\">{esc(d.name)}</a>"
+            f"<span class=\"mono\">{esc(dn)}</span> <span class=\"tag\" title=\"{esc(d.registry)}\">other index</span>"
+        } else if have.contains(dn) {
+            f"<a class=\"mono\" href=\"{esc(url(stone_out(dn)))}\">{esc(dn)}</a>"
         } else {
-            f"<span class=\"mono\">{esc(d.name)}</span> <span class=\"tag\">not in index</span>"
+            f"<span class=\"mono\">{esc(dn)}</span> <span class=\"tag\">not in index</span>"
         };
-        b.push_str(f"<tr><td>{name}</td><td class=\"mono\">{esc(d.req)}</td></tr>");
+        let alias = if dn == d.name { "" } else { f" <span class=\"muted\">as</span> <span class=\"mono\">{esc(d.name)}</span>" };
+        let only = if d.target.is_empty() { "" } else { f" <span class=\"tag\" title=\"only for this target\">{esc(d.target)}</span>" };
+        b.push_str(f"<tr><td>{name}{alias}{only}</td><td class=\"mono\">{esc(d.req)}</td></tr>");
     }
     b.to_str()
 }

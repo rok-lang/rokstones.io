@@ -225,7 +225,7 @@ publish() {
 }
 publish "$line" "$meta"
 expect_code 200 "publish"
-expect_body 'Published { name: "geom", version: "0.1.0", file: "ge/om/geom" }' "publish body"
+expect_body 'Published { name: "geom", version: "0.1.0", file: "ge/om/geom", warnings: \[\] }' "publish body"
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Publish geom 0.1.0" ] || fail "pushed commit"
 [ "$(git -C "$T/remote.git" log -1 --format='%an <%ae>')" = "alice <1001+alice@users.noreply.github.com>" ] || fail "commit author"
 [ "$(git -C "$T/remote.git" show HEAD:ge/om/geom)" = "$line" ] || fail "index line"
@@ -250,6 +250,19 @@ req POST /api/v1/publish "${auth[@]}" --data-binary "$line"
 expect_code 400 "bare entry"
 publish "${line//0.1.0/0.1.1}" '{ homepage: "ftp://x" }'
 expect_code 400 "bad metadata"
+# A rename, a target-only dependency, the targets, the packed size, the
+# README text and a key this server does not know.
+line2=${line//0.1.0/0.1.2}
+dep='{ name: "shapes", req: "^0.1", kind: "normal", package: "ge-om", target: "cfg(unix)" }'
+line2=${line2//deps: \[\]/deps: [$dep]}
+publish "$line2" '{ description: "Shapes", categories: ["mathematics"], has_lib: true, bin_names: ["geom-cli"], size: 4096, readme_content: "# geom\n\nShapes, **fast**.\n", future_key: { a: 1 } }'
+expect_code 200 "publish with new metadata"
+expect_body 'warnings: \["meta: `future_key` is not known to this registry; kept as sent"\]' "unknown key warning"
+[ "$(git -C "$T/remote.git" show HEAD:ge/om/geom | tail -1)" = "$line2" ] || fail "rename line"
+publish "${line2//cfg(unix)/cfg(unix}"
+expect_code 400 "bad target"
+publish "${line//0.1.0/0.1.3}" "{ readme_content: \"$(head -c 524289 /dev/zero | tr '\0' a)\" }"
+expect_code 400 "readme cap"
 req POST /api/v1/publish --data-binary "Publish { entry: $line }"
 expect_code 401 "no token"
 app_line=${line//example.invalid\/geom/example.invalid\/app}
@@ -268,15 +281,19 @@ expect_code 200 "publish native"
 [ "$(git -C "$T/remote.git" show HEAD:native/zl/ib/zlib)" = "$native" ] || fail "native line"
 ok "publish"
 
-req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0" }'
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0", message: "wrong areas" }'
 expect_code 200 "yank"
 expect_body 'Yanked { name: "geom", version: "0.1.0", yanked: true }' "yank body"
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Yank geom 0.1.0" ] || fail "yank commit"
 git -C "$T/remote.git" show HEAD:ge/om/geom | grep -q 'yanked: true' || fail "yanked line"
+req GET /api/v1/stones/geom
+expect_body 'version: "0.1.0", yanked: true, yank_message: "wrong areas"' "yank message"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0", undo: true, message: "x" }'
+expect_code 400 "unyank with a message"
 req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0", undo: true, native: false }'
 expect_code 200 "unyank"
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Unyank geom 0.1.0" ] || fail "unyank commit"
-[ "$(git -C "$T/remote.git" show HEAD:ge/om/geom)" = "$line" ] || fail "unyanked line"
+[ "$(git -C "$T/remote.git" show HEAD:ge/om/geom | head -1)" = "$line" ] || fail "unyanked line"
 req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "zlib", version: "1.3.1", native: true }'
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Yank native zlib 1.3.1" ] || fail "native yank commit"
 req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "9.9.9" }'
@@ -287,8 +304,17 @@ ok "yank"
 req GET /api/v1/stones/geom
 expect_code 200 "stone api"
 expect_body 'Stone { name: "geom", native: false, owners: \[{ id: 1001, login: "alice" }\]' "stone api owners"
-expect_body 'Version { version: "0.1.0", yanked: false, meta: { description: "Shapes", license: "MIT", authors: \["Ann <ann@example.org>"\], keywords: \["geometry"\], categories: \["mathematics"\], metadata: { docs: { all: true } } }, published_by: Actor { id: 1001, login: "alice", at: [0-9]*' "stone api version"
+expect_body 'Version { version: "0.1.0", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes", license: "MIT", authors: \["Ann <ann@example.org>"\], keywords: \["geometry"\], categories: \["mathematics"\], metadata: { docs: { all: true } } }, has_readme: false, downloads: 0, published_by: Actor { id: 1001, login: "alice", at: [0-9]*' "stone api version"
+expect_body 'Version { version: "0.1.2", yanked: false, yank_message: none, deps: \[{ name: "shapes", req: "^0.1", kind: "normal", package: "ge-om", target: "cfg(unix)" }\], meta: { description: "Shapes", categories: \["mathematics"\], has_lib: true, bin_names: \["geom-cli"\], size: 4096, future_key: { a: 1 } }, has_readme: true, downloads: 0,' "stone api new fields"
 expect_body 'yanked_by: Actor { id: 1001, login: "alice", at: [0-9]* }, unyanked_by: Actor { id: 1001, login: "alice"' "stone api yank record"
+req GET /api/v1/stones/geom/0.1.2/readme
+expect_code 200 "readme api"
+[ "$(header content-type)" = "text/markdown; charset=utf-8" ] || fail "readme type: $(header content-type)"
+[ "$(cat "$T/b")" = "$(printf '# geom\n\nShapes, **fast**.')" ] || fail "readme text: $(cat "$T/b")"
+req GET /api/v1/stones/geom/0.1.0/readme
+expect_code 404 "no readme"
+req GET /api/v1/stones/geom/0.1.2/x
+expect_code 404 "unknown sub-route"
 req GET /api/v1/native/zlib
 expect_code 200 "native api"
 expect_body 'meta: { license: "Zlib" }' "native api meta"
@@ -316,6 +342,9 @@ expect_code 200 "stone page after publish"
 expect_body '<dt>Owner</dt><dd><a href="https://github.com/alice">alice</a></dd>' "owners on the page"
 expect_body 'by <a href="https://github.com/alice">alice</a>' "publisher on the page"
 expect_body '<dt>Category</dt><dd>mathematics</dd>' "categories on the page"
+expect_body '<p>Shapes, <strong>fast</strong>.</p>' "published README rendered"
+req GET /stones/geom/dependencies
+expect_body 'href="/stones/ge-om">ge-om</a> <span class="muted">as</span> <span class="mono">shapes</span> <span class="tag" title="only for this target">cfg(unix)</span>' "rename and target on the page"
 req GET /stones/geom/0.1.0
 expect_code 200 "version page"
 expect_body 'rel="canonical" href="[^"]*/stones/geom/0.1.0"' "version canonical"

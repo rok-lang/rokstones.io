@@ -61,7 +61,7 @@ Settings live in `.env` (copy `.env.example`; process env wins over the file):
 | `ROKSTONES_ADDR` | Listen address (default `127.0.0.1:8080`) |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app |
 | `ROKSTONES_ADMINS` | Comma-separated GitHub logins that may create publish tokens |
-| `ROKSTONES_DATA` | Directory of `db.rokon` (accounts, tokens, owners, each version's metadata and publisher) and `sources/` |
+| `ROKSTONES_DATA` | Directory of `db.rokon` (accounts, tokens, owners, each version's metadata and publisher), `readme/<name>/<version>.md` (READMEs sent with a publish) and `sources/` |
 | `ROKSTONES_INDEX` | Index checkout the server commits to and pushes from |
 | `GITHUB_OAUTH_URL`, `GITHUB_API_URL` | Default GitHub; tests point them at a fake |
 
@@ -70,12 +70,19 @@ Login is GitHub OAuth only (`read:user`). Sessions are a 32-byte cookie stored a
 | Route | Purpose |
 |-------|---------|
 | `GET /api/v1/me` | account + publish flag |
-| `POST /api/v1/publish` | `Publish { entry: Stone { .. }, meta: { .. } }`: the index entry `rok publish` prints and the manifest's descriptive fields |
-| `POST /api/v1/yank` | `Yank { name, version, undo, native }` |
-| `GET /api/v1/stones/<name>` | no token: owners, and each version with its metadata, `published_by`, `yanked_by`, `unyanked_by` |
-| `GET /api/v1/native/<name>` | the same for a native package |
+| `POST /api/v1/publish` | `Publish { entry: Stone { .. }, meta: { .. } }`: the index entry `rok publish` prints and the stone's metadata; answers `Published { name, version, file, warnings }` |
+| `POST /api/v1/yank` | `Yank { name, version, undo, native, message }`; `message` (at most 512 bytes) is the reason, cleared by an unyank |
+| `GET /api/v1/stones/<name>` | no token: owners, and each `Version { version, yanked, yank_message, deps, meta, has_readme, downloads, published_by, yanked_by, unyanked_by }`; `deps` is as in the index line |
+| `GET /api/v1/stones/<name>/<version>/readme` | no token: the README sent with that version, `text/markdown`; 404 when none was sent |
+| `GET /api/v1/native/<name>` | the same for a native package (and `/<version>/readme`) |
 
-An index line holds only what resolution needs, named as in the manifest: `name`, `version`, `deps`, `features`, `source`, `tree` (the commit's git tree hash), `yanked`, `toolchain`, `links`. The descriptive fields (`description`, `license`, `license_file`, `authors`, `homepage`, `documentation`, `repository`, `readme`, `keywords`, `categories`, `include`, `exclude`, `publish`, `metadata`, `default_run`) come in `meta` and are kept in `db.rokon` with the account and time of the publish, yank and unyank.
+An index line holds only what resolution needs, named as in the manifest: `name`, `version`, `deps`, `features`, `source`, `tree` (the commit's git tree hash), `yanked`, `toolchain`, `links`. A dependency is `{ name, req, kind, registry, optional, features, default_features, package, target }`: `package` is the stone it names when `name` is a rename (as Cargo's), `target` limits it to a triple or a `cfg(..)` expression, which the client evaluates.
+
+Index lines stay strict: a field the server does not know is refused, because every reader of the index must understand every line it resolves. The server is deployed before the clients that write a new field, so it learns the field first; a field older clients would misread also takes a higher `v` on the line.
+
+`meta` is forward compatible instead. The known keys are the manifest's descriptive fields (`description`, `license`, `license_file`, `authors`, `homepage`, `documentation`, `repository`, `readme`, `keywords`, `categories`, `include`, `exclude`, `publish`, `metadata`, `links`, `default_run`), what the client measured (`has_lib`, `bin_names`, `size`: packed bytes) and `readme_content` (the README text, at most 512 KiB). They are checked; any other key is kept as sent (at most 32 keys, 16 KiB), returned in the API with the rest, and named in the reply's `warnings`, never refused. The metadata is kept in `db.rokon` with the account and time of the publish, yank and unyank; the README text in its own file, shown on the stone page in place of the commit's README.
+
+`downloads` stays 0: stones are fetched from their git source, not from this server, so nothing counts them yet. The field is there for when the server serves archives.
 
 Each write runs under one lock: reset to upstream, append (or flip `yanked`), commit as the publishing account, and push; a failed push resets and answers 503. Entry and metadata validation, source fetch and tree-hash checks, and the commit flow are in `src/index.rok`.
 
