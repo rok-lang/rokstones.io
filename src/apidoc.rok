@@ -39,7 +39,7 @@ fn walk(read: fn(str) -> (str | none), file: str, path: str, mods: List<Module>)
 /// `src` with a link mapper for relative links in docs.
 fn md(text: str, link: fn(str) -> str) -> str {
     if text.trim().is_empty() { return ""; }
-    "<div class=\"md\">" + markdown::render_untrusted(text, markdown::Options { link: link, code: doc_code }).html + "</div>"
+    "<div class=\"md\">" + web::chrome::align_classes(markdown::render_untrusted(text, markdown::Options { link: link, code: doc_code }).html) + "</div>"
 }
 
 /// Fenced code in a doc comment is rok unless it says otherwise.

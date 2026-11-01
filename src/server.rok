@@ -222,9 +222,12 @@ pub struct Resp {
 }
 
 // Every page, generated or from public/: Cloudflare injects its Web
-// Analytics beacon; style attributes give each stone its hue; a README
-// may show images from anywhere on https.
-const CSP: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self' https://cloudflareinsights.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+// Analytics beacon; a README may show images from anywhere on https. No
+// style attributes: a stone's hue is a class (layout::hue_class).
+const CSP: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; font-src 'self'; img-src 'self' data: https:; connect-src 'self' https://cloudflareinsights.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" + http::REPORT_TO;
+/// The CSP of a page with a <select> (the list's sort): WebKit's own select
+/// shadow DOM sets style attributes, so those are allowed there alone.
+const CSP_SELECT: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self' https://cloudflareinsights.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" + http::REPORT_TO;
 
 fn html(status: i32, body: str) -> Resp {
     Resp {
@@ -698,6 +701,14 @@ fn missing_stone(site: Site, p: str, rest: str, query: str) -> Resp | none {
 fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let p = r.path;
     if p.starts_with("/api/") { return api_route(cfg, r); }
+    if p == http::REPORT_PATH {
+        if r.method != "POST" { return Resp { status: 405, headers: ["Content-Type: text/plain; charset=utf-8", "Cache-Control: no-store"], body: "POST only\n", file: "" }; }
+        if let line: str = http::csp_report(r.body) { eprintln(line); }
+        return Resp { status: 204, headers: ["Cache-Control: no-store"], body: "", file: "" };
+    }
+    if p == http::SPECULATION_PATH && (r.method == "GET" || r.method == "HEAD") {
+        return Resp { status: 200, headers: [http::SPECULATION_TYPE, "Cache-Control: public, max-age=3600"], body: http::SPECULATION_RULES, file: "" };
+    }
     let post = r.method == "POST";
     let get = r.method == "GET" || r.method == "HEAD";
     if p == "/login" && get { return try login(cfg); }
@@ -813,7 +824,12 @@ pub fn etag_matches(header: str, tag: str) -> bool {
 /// that already has it a 304. The status sent.
 fn respond(s: TcpStream, r: Request, status: i32, headers: List<str>, body: List<u8>) -> i32 {
     let head = r.method == "HEAD";
-    if headers.contains("Content-Type: text/html; charset=utf-8") { headers.push(CSP); }
+    if headers.contains("Content-Type: text/html; charset=utf-8") {
+        let text = (try? str::from_utf8(body)) ?? "";
+        headers.push(if text.contains("<select") { CSP_SELECT } else { CSP });
+        headers.push(http::REPORTING);
+        headers.push(http::SPECULATION);
+    }
     if status == 200 && (r.method == "GET" || head) && !headers.contains("Cache-Control: no-store") {
         let tag = http::etag(body);
         headers.push("ETag: " + tag);

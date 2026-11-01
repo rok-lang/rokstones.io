@@ -345,6 +345,7 @@ fn main() throws {
 
     let files: Dict<str, str> = Dict::new();
     let guide = markdown::render(try fs::read_to_str("pages/publishing.md"), layout::md(|h| h));
+    guide.html = web::chrome::align_classes(guide.html);
     files.insert("index.html", layout::page(site, "index.html", site.title, layout::landing(site, all)));
     files.insert("publishing.html", layout::page_desc(site, "publishing.html", "Using and publishing stones", "How to add a stone to a Rok package, and how a version gets into the index.", layout::guide(guide)));
     files.insert("404.html", layout::page(site, "404.html", "Not found", layout::not_found()));

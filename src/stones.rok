@@ -580,7 +580,7 @@ fn shown(r: Readmes, k: str, file: str, versions: List<Version>, v: Version, rde
     }
     if !text.is_empty() {
         let doc = markdown::render_untrusted(text, layout::md(|h| repo_link(v.url, v.rev, h)));
-        html = fix_headings(doc.html, k);
+        html = fix_headings(web::chrome::align_classes(doc.html), k);
     }
     Stone {
         name: k,
