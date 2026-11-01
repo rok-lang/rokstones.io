@@ -131,7 +131,7 @@ fn icon_search() -> str {
 }
 
 fn search_box() -> str {
-    f"<form class=\"search\" role=\"search\" action=\"/stones\">{icon_search()}<input class=\"q\" name=\"q\" type=\"search\" placeholder=\"Search stones\" aria-label=\"Search stones\" aria-keyshortcuts=\"/ Control+K Meta+K\" autocomplete=\"off\" spellcheck=\"false\" role=\"combobox\" aria-autocomplete=\"list\" aria-expanded=\"false\" aria-controls=\"results\"><kbd class=\"kbd\" aria-hidden=\"true\">/</kbd><ul id=\"results\" class=\"results\" role=\"listbox\" aria-label=\"Search results\" hidden></ul><p class=\"sr-only\" role=\"status\"></p></form>"
+    f"<form class=\"search\" role=\"search\" action=\"/stones\">{icon_search()}<input class=\"q\" name=\"q\" type=\"search\" placeholder=\"Search stones\" aria-label=\"Search stones\" aria-keyshortcuts=\"/ Control+K Meta+K\" autocomplete=\"off\" spellcheck=\"false\" role=\"combobox\" aria-autocomplete=\"list\" aria-expanded=\"false\" aria-controls=\"results\"><kbd class=\"kbd\" aria-hidden=\"true\">/</kbd><ul id=\"results\" class=\"results appear\" role=\"listbox\" aria-label=\"Search results\" hidden></ul><p class=\"sr-only\" role=\"status\"></p></form>"
 }
 
 /// `<head>` from the charset to the icons. `url` is the canonical address,
@@ -729,7 +729,7 @@ pub fn api_page(site: Site, s: Stone) -> str {
     let syms = apidoc::symbols(s.api);
     let n = apidoc::count(s.api);
     let main = f"<p class=\"t-ui muted\">The public items of {esc(s.name)} {esc(l.vers)} and their doc comments, read from its source at {commit_link(l)}. Signatures are shown as written.</p>
-<details class=\"syms-m\"><summary>Symbols <span class=\"ct\">{n}</span></summary><nav class=\"syms\" aria-label=\"Symbols\">{syms}</nav></details>
+<details class=\"syms-m grow\"><summary>Symbols <span class=\"ct\">{n}</span></summary><nav class=\"syms\" aria-label=\"Symbols\">{syms}</nav></details>
 <div class=\"api\">{apidoc::body(s.api, link)}</div>
 ";
     let side = f"<aside class=\"meta api-side\" aria-label=\"Symbols\">

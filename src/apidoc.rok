@@ -158,7 +158,7 @@ fn item_html(m: Module, it: Item, link: fn(str) -> str) -> str {
         out.push_str("</ul>");
     }
     if it.traits.len() > 0 {
-        out.push_str(f"<details class=\"impls\"><summary>{if it.traits.len() == 1 { "1 trait implementation" } else { f"{it.traits.len()} trait implementations" }}</summary><ul>");
+        out.push_str(f"<details class=\"impls grow\"><summary>{if it.traits.len() == 1 { "1 trait implementation" } else { f"{it.traits.len()} trait implementations" }}</summary><ul>");
         for t in it.traits { out.push_str(f"<li><code>{rok_syntax::highlight_rok(t)}</code></li>"); }
         out.push_str("</ul></details>");
     }

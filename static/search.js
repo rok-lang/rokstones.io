@@ -8,6 +8,25 @@
     index ? Promise.resolve(index)
       : fetch("/search-index.json").then((r) => r.json()).then((d) => (index = d));
 
+  // Run f and ease el's height to the result (copy.js, the web kit). A
+  // second call while one runs starts from where that one has got to, and
+  // el does not scroll while its height moves.
+  const resize = (el, f) => {
+    if (!window.rokResize || !el.getAnimations) return f();
+    const run = el.getAnimations().filter((a) => a.constructor === Animation);
+    if (run.length) {
+      el.style.height = el.offsetHeight + "px";
+      el.style.overflowY = "";
+      run.forEach((a) => a.cancel());
+    }
+    rokResize(el, () => { el.style.height = ""; f(); });
+    const a = el.getAnimations().find((a) => a.constructor === Animation);
+    if (a) {
+      el.style.overflowY = "hidden";
+      a.onfinish = () => { el.style.overflowY = ""; };
+    }
+  };
+
   // Narrow header: the menu button shows the nav below.
   const hdr = document.querySelector(".hdr");
   const menu = document.querySelector(".hdr .menu");
@@ -52,12 +71,15 @@
   for (const box of document.querySelectorAll(".inst")) {
     const tabs = [...box.querySelectorAll(".itabs [role=tab]")];
     const pick = (t, focus) => {
-      for (const x of tabs) {
-        const on = x === t;
-        x.setAttribute("aria-selected", on ? "true" : "false");
-        x.tabIndex = on ? 0 : -1;
-        document.getElementById(x.getAttribute("aria-controls")).classList.toggle("on", on);
-      }
+      // The panels differ in height: the box eases to the new one.
+      resize(box, () => {
+        for (const x of tabs) {
+          const on = x === t;
+          x.setAttribute("aria-selected", on ? "true" : "false");
+          x.tabIndex = on ? 0 : -1;
+          document.getElementById(x.getAttribute("aria-controls")).classList.toggle("on", on);
+        }
+      });
       if (focus) t.focus();
     };
     tabs.forEach((t, k) => {
@@ -173,6 +195,14 @@
       if (!query) { show(false); status.textContent = ""; return; }
       const data = await load();
       const [hits, terms] = match(data, query);
+      // An open list eases to its new length; a closed one fades in (.appear).
+      if (box.hidden) fill(hits, terms, data);
+      else resize(box, () => fill(hits, terms, data));
+      show(true);
+      status.textContent = !hits.length ? "No stones match" : hits.length === 1 ? "1 stone" : `${hits.length} stones`;
+      mark(-1);
+    };
+    const fill = (hits, terms, data) => {
       box.replaceChildren();
       hits.slice(0, MAX).forEach((e, k) => {
         const li = document.createElement("li");
@@ -214,9 +244,6 @@
         li.textContent = `${hits.length} stones match. Press Enter to see all.`;
         box.append(li);
       }
-      show(true);
-      status.textContent = !hits.length ? "No stones match" : hits.length === 1 ? "1 stone" : `${hits.length} stones`;
-      mark(-1);
     };
     q.addEventListener("focus", load, { once: true });
     q.addEventListener("input", search);
