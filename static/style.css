@@ -302,6 +302,7 @@ pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);bo
    does not interpolate */
 @media (max-width:720px) and (prefers-reduced-motion:no-preference){
   .hdr .nav{height:0;padding-block:0;opacity:0;overflow:clip;transition:height var(--dur-out) var(--ease),padding var(--dur-out) var(--ease),opacity var(--dur-out) var(--ease),display var(--dur-out) allow-discrete}
+  .hdr:not(.open) .nav{pointer-events:none}
   .hdr.open .nav{height:auto;padding-block:4px;opacity:1;transition-duration:var(--dur)}
   @starting-style{.hdr.open .nav{height:0;padding-block:0;opacity:0}}
 }
