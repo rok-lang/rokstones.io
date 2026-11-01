@@ -221,8 +221,10 @@ pub struct Resp {
     pub file: str;
 }
 
-// Cloudflare injects its Web Analytics beacon into every page it proxies.
-const CSP: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; style-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'";
+// Every page, generated or from public/: Cloudflare injects its Web
+// Analytics beacon; style attributes give each stone its hue; a README
+// may show images from anywhere on https.
+const CSP: str = "Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self' https://cloudflareinsights.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 fn html(status: i32, body: str) -> Resp {
     Resp {
@@ -230,9 +232,6 @@ fn html(status: i32, body: str) -> Resp {
         headers: [
             "Content-Type: text/html; charset=utf-8",
             "Cache-Control: no-store",
-            "X-Frame-Options: DENY",
-            "Referrer-Policy: same-origin",
-            CSP,
         ],
         body: body,
         file: "",
@@ -814,6 +813,7 @@ pub fn etag_matches(header: str, tag: str) -> bool {
 /// that already has it a 304. The status sent.
 fn respond(s: TcpStream, r: Request, status: i32, headers: List<str>, body: List<u8>) -> i32 {
     let head = r.method == "HEAD";
+    if headers.contains("Content-Type: text/html; charset=utf-8") { headers.push(CSP); }
     if status == 200 && (r.method == "GET" || head) && !headers.contains("Cache-Control: no-store") {
         let tag = http::etag(body);
         headers.push("ETag: " + tag);
