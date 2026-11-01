@@ -8,24 +8,8 @@
     index ? Promise.resolve(index)
       : fetch("/search-index.json").then((r) => r.json()).then((d) => (index = d));
 
-  // Run f and ease el's height to the result (copy.js, the web kit). A
-  // second call while one runs starts from where that one has got to, and
-  // el does not scroll while its height moves.
-  const resize = (el, f) => {
-    if (!window.rokResize || !el.getAnimations) return f();
-    const run = el.getAnimations().filter((a) => a.constructor === Animation);
-    if (run.length) {
-      el.style.height = el.offsetHeight + "px";
-      el.style.overflowY = "";
-      run.forEach((a) => a.cancel());
-    }
-    rokResize(el, () => { el.style.height = ""; f(); });
-    const a = el.getAnimations().find((a) => a.constructor === Animation);
-    if (a) {
-      el.style.overflowY = "hidden";
-      a.onfinish = () => { el.style.overflowY = ""; };
-    }
-  };
+  // Run f and ease el's size to the result (copy.js, the web kit).
+  const resize = (el, f) => (window.rokResize ? rokResize(el, f) : f());
 
   // Narrow header: the menu button shows the nav below.
   const hdr = document.querySelector(".hdr");
