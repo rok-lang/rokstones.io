@@ -9,6 +9,8 @@ use rok::std::process::Command;
 use rok::core::cmp::Ordering;
 use pkg::layout;
 use pkg::apidoc;
+use pkg::meta;
+use pkg::meta::Release;
 
 pub struct Req {
     pub name: str;
@@ -20,15 +22,23 @@ pub struct Req {
 }
 
 pub struct Version {
-    pub vers: str;
+    pub version: str;
     pub deps: List<Req>;
     pub url: str;
     pub rev: str;
-    pub cksum: str;
+    pub tree: str;
     pub yanked: bool;
-    /// From the manifest; `""` when not given.
-    pub description: str;
-    pub license: str;
+    /// The toolchain pin and native library of the line; `""`: none.
+    pub toolchain: str = "";
+    pub links: str = "";
+    /// Sent with the publish (meta::Meta); `""` when not given or not known.
+    pub description: str = "";
+    pub license: str = "";
+    /// Who published, yanked it (GitHub logins); `""` when not known.
+    pub by: str = "";
+    pub yanked_by: str = "";
+    /// Its metadata as published; empty when not known.
+    pub meta: meta::Meta = meta::Meta {};
     /// Feature name and what it enables, in manifest order.
     pub features: List<(str, List<str>)>;
     /// When its line was added to the index (`YYYY-MM-DD`, commit date);
@@ -46,14 +56,20 @@ pub struct Facts {
     pub rok_lines: usize;
 }
 
-/// Package metadata from the commit's `rok.rokon`; empty when not given.
+/// Package metadata as a page shows it: as published (meta::Meta), else
+/// from the commit's `rok.rokon`; empty when not given.
 pub struct Meta {
+    pub description: str = "";
+    pub license: str = "";
     pub keywords: List<str>;
+    pub categories: List<str> = List::new();
     /// Names only: an `<address>` after a name is dropped.
     pub authors: List<str>;
     /// http(s) addresses only; `""`: none.
     pub homepage: str;
     pub documentation: str;
+    pub repository: str = "";
+    pub links: str = "";
 }
 
 pub fn no_meta() -> Meta { Meta { keywords: List::new(), authors: List::new(), homepage: "", documentation: "" } }
@@ -91,6 +107,8 @@ pub struct Stone {
     /// `use ..;` for the install box (apidoc::import_line); `""`: none.
     pub import: str;
     pub meta: Meta;
+    /// Who may publish it (GitHub logins); empty when not known.
+    pub owners: List<str> = List::new();
     /// The version a version page shows (`readme`, `api`, .. are its);
     /// `""` on the stone's own pages.
     pub at: str = "";
@@ -100,6 +118,19 @@ pub struct Stone {
     /// in those stones themselves.
     pub views: List<Stone> = List::new();
 }
+
+/// What the server's data file adds to the index.
+pub struct Data {
+    /// By `<key>@<version>` (`index::key`).
+    pub releases: Dict<str, Release>;
+    /// Owner logins by key.
+    pub owners: Dict<str, List<str>>;
+}
+
+pub fn no_data() -> Data { Data { releases: Dict::new(), owners: Dict::new() } }
+
+/// A name up to `-` / `_` and case (`index::key`).
+fn key_of(name: str) -> str { name.to_lowercase().replace("-", "_") }
 
 pub struct Index {
     pub stones: List<Stone>;
@@ -218,11 +249,11 @@ pub fn is_pre(v: str) -> bool { !split_vers(v).1.is_empty() }
 /// pre-release; the highest of all when every version is yanked.
 fn pick_latest(vs: List<Version>) -> Version {
     let best = vs[0];
-    let rank = |v: Version| if v.yanked { 0 } else if is_pre(v.vers) { 1 } else { 2 };
+    let rank = |v: Version| if v.yanked { 0 } else if is_pre(v.version) { 1 } else { 2 };
     for v in vs {
         let r = rank(v);
         let rb = rank(best);
-        if r > rb || (r == rb && cmp_vers(v.vers, best.vers) == Ordering::Greater) { best = v; }
+        if r > rb || (r == rb && cmp_vers(v.version, best.version) == Ordering::Greater) { best = v; }
     }
     best
 }
@@ -280,8 +311,8 @@ pub fn parse_line(line: str) throws (LineError) -> (str, Version) {
     if let x: OrderedDict<str, Value> = fields_of(v, "Stone") { f = x; } else { throw bad("not a `Stone { .. }`"); }
     let name = get_str(f, "name") ?? "";
     if !is_name(name) { throw bad(f"bad name `{name}`"); }
-    let vers = get_str(f, "vers") ?? "";
-    if vers.is_empty() { throw bad("no `vers`"); }
+    let version = get_str(f, "version") ?? "";
+    if version.is_empty() { throw bad("no `version`"); }
     let deps: List<Req> = List::new();
     if let d: Value = f.get("deps") {
         if let Value::List(xs) = d {
@@ -318,7 +349,7 @@ pub fn parse_line(line: str) throws (LineError) -> (str, Version) {
             features.push((fname, on));
         }
     }
-    (name, Version { vers: vers, deps: deps, url: url, rev: rev, cksum: get_str(f, "cksum") ?? "", yanked: yanked, description: get_str(f, "description") ?? "", license: get_str(f, "license") ?? "", features: features })
+    (name, Version { version: version, deps: deps, url: url, rev: rev, tree: get_str(f, "tree") ?? "", yanked: yanked, toolchain: get_str(f, "toolchain") ?? "", links: get_str(f, "links") ?? "", features: features })
 }
 
 /// `git args..`; its stdout, or none when it fails or cannot start.
@@ -488,8 +519,18 @@ fn facts_of(t: Tree, files: List<(str, i64)>) -> Facts {
     f
 }
 
+/// `name@version` of a line in the index's history, which has lines
+/// from before the index took the manifest's names (`vers`).
+fn line_key(line: str) -> str | none {
+    let v = try rokon::parse(line) catch _ { return none; };
+    let f = fields_of(v, "Stone") ?? { return none; };
+    let name = get_str(f, "name") ?? { return none; };
+    let version = get_str(f, "version") ?? (get_str(f, "vers") ?? { return none; });
+    name + "@" + version
+}
+
 /// The date each version's line was first added to the index `dir`
-/// (commit date, `YYYY-MM-DD`), by `name@vers`; empty without history.
+/// (commit date, `YYYY-MM-DD`), by `name@version`; empty without history.
 pub fn version_dates(dir: str) -> Dict<str, str> {
     let out: Dict<str, str> = Dict::new();
     let log = git(["-C", dir, "log", "--reverse", "--relative", "--no-renames", "--no-color", "--no-ext-diff", "-p", "-U0", "--format==%cs"]) ?? "";
@@ -499,8 +540,7 @@ pub fn version_dates(dir: str) -> Dict<str, str> {
         if l.starts_with("=") {
             cur = l[1:];
         } else if l.starts_with("+Stone {") {
-            let (name, v) = try parse_line(l[1:]) catch _ { continue; };
-            let key = name + "@" + v.vers;
+            let key = line_key(l[1:]) ?? { continue; };
             if !out.contains_key(key) { out.insert(key, cur); }
         }
     }
@@ -570,14 +610,17 @@ fn shown(r: Readmes, k: str, file: str, versions: List<Version>, v: Version, rde
     let facts: Facts | none = none;
     let api: List<web::apidoc::Module> = List::new();
     let api_none = "tree";
-    let meta = no_meta();
+    let manifest = meta::empty();
     if let tr: Tree = tree_of_stone(r, k, v.url, v.rev) {
         let fl = tree_files(tr);
         facts = facts_of(tr, fl);
         api = apidoc::collect(k.replace("-", "_"), |p| tree_read(tr, p));
         api_none = if api.is_empty() { "lib" } else { "" };
-        meta = meta_of(tree_read(tr, "rok.rokon") ?? "");
+        manifest = manifest_meta(tree_read(tr, "rok.rokon") ?? "");
     }
+    // As published; the commit's manifest fills what was not sent.
+    let meta = shown_meta(meta::over(v.meta, manifest));
+    if meta.links.is_empty() { meta.links = v.links; }
     if !text.is_empty() {
         let doc = markdown::render_untrusted(text, layout::md(|h| repo_link(v.url, v.rev, h)));
         html = fix_headings(doc.html, k);
@@ -590,7 +633,7 @@ fn shown(r: Readmes, k: str, file: str, versions: List<Version>, v: Version, rde
         time: t,
         date: d,
         readme: html,
-        desc: if v.description.is_empty() { first_para(html, 140) } else { v.description },
+        desc: if meta.description.is_empty() { first_para(html, 140) } else { meta.description },
         rdeps: rdeps,
         facts: facts,
         api: api,
@@ -602,7 +645,7 @@ fn shown(r: Readmes, k: str, file: str, versions: List<Version>, v: Version, rde
 
 /// A new `Stone` with the fields of `s`.
 fn again(s: Stone) -> Stone {
-    Stone { name: s.name, file: s.file, versions: s.versions, latest: s.latest, time: s.time, date: s.date, readme: s.readme, desc: s.desc, rdeps: s.rdeps, facts: s.facts, api: s.api, api_none: s.api_none, import: s.import, meta: s.meta }
+    Stone { name: s.name, file: s.file, versions: s.versions, latest: s.latest, time: s.time, date: s.date, readme: s.readme, desc: s.desc, rdeps: s.rdeps, facts: s.facts, api: s.api, api_none: s.api_none, import: s.import, meta: s.meta, owners: s.owners }
 }
 
 fn str_list(f: OrderedDict<str, Value>, k: str) -> List<str> {
@@ -623,21 +666,52 @@ fn web_url(u: str) -> str {
     if (t.starts_with("https://") || t.starts_with("http://")) && !t.contains(" ") { t } else { "" }
 }
 
-/// Keywords, authors, homepage and documentation from a `rok.rokon`.
-pub fn meta_of(text: str) -> Meta {
-    let m = no_meta();
+/// The descriptive fields of a `rok.rokon`, unchecked.
+pub fn manifest_meta(text: str) -> meta::Meta {
+    let m = meta::empty();
     let v = try rokon::parse(text) catch _ { return m; };
     let f = fields_of(v, "Package") ?? { return m; };
+    m.description = get_str(f, "description") ?? "";
+    m.license = get_str(f, "license") ?? "";
     m.keywords = str_list(f, "keywords");
-    for a in str_list(f, "authors") {
-        // `Name <mail>`: the name; an address alone stays out.
-        let n = (if let k: usize = a.find("<") { a[:k] } else { a }).trim();
-        if !n.is_empty() && !n.contains("@") { m.authors.push(n); }
-    }
-    m.homepage = web_url(get_str(f, "homepage") ?? "");
-    m.documentation = web_url(get_str(f, "documentation") ?? "");
+    m.categories = str_list(f, "categories");
+    m.authors = str_list(f, "authors");
+    m.homepage = get_str(f, "homepage") ?? "";
+    m.documentation = get_str(f, "documentation") ?? "";
+    m.repository = get_str(f, "repository") ?? "";
+    m.links = get_str(f, "links") ?? "";
     m
 }
+
+/// `m` as a page shows it.
+pub fn shown_meta(m: meta::Meta) -> Meta {
+    let out = no_meta();
+    out.description = m.description.trim();
+    out.license = m.license.trim();
+    let tidy = |xs: List<str>| {
+        let o: List<str> = List::new();
+        for x in xs {
+            let t = x.trim();
+            if !t.is_empty() && !o.contains(t) { o.push(t); }
+        }
+        o
+    };
+    out.keywords = tidy(m.keywords);
+    out.categories = tidy(m.categories);
+    for a in tidy(m.authors) {
+        // `Name <mail>`: the name; an address alone stays out.
+        let n = (if let k: usize = a.find("<") { a[:k] } else { a }).trim();
+        if !n.is_empty() && !n.contains("@") { out.authors.push(n); }
+    }
+    out.homepage = web_url(m.homepage);
+    out.documentation = web_url(m.documentation);
+    out.repository = web_url(m.repository);
+    out.links = m.links;
+    out
+}
+
+/// Keywords, authors, homepage, .. from a `rok.rokon`, as a page shows them.
+pub fn meta_of(text: str) -> Meta { shown_meta(manifest_meta(text)) }
 
 /// A README under the stone's own `<h1>`: a leading `<h1>` that is the
 /// stone's name goes, and any other `<h1>` moves every heading down one.
@@ -656,7 +730,7 @@ pub fn fix_headings(html: str, name: str) -> str {
     out
 }
 
-pub fn load(dir: str, r: Readmes) -> Index {
+pub fn load(dir: str, r: Readmes, data: Data) -> Index {
     let errors: List<str> = List::new();
     let by_name: Dict<str, List<Version>> = Dict::new();
     let files: Dict<str, str> = Dict::new();
@@ -698,6 +772,20 @@ pub fn load(dir: str, r: Readmes) -> Index {
     for k in by_name.keys() { names.push(k); }
     names.sort();
 
+    for k in names {
+        let vs = by_name[k];
+        for i in 0..vs.len() {
+            let rel = data.releases.get(key_of(k) + "@" + vs[i].version) ?? { continue; };
+            vs[i].meta = rel.meta;
+            vs[i].description = rel.meta.description;
+            vs[i].license = rel.meta.license;
+            if let a: meta::Actor = rel.published_by { vs[i].by = a.login; }
+            if vs[i].yanked {
+                if let a: meta::Actor = rel.yanked_by { vs[i].yanked_by = a.login; }
+            }
+        }
+    }
+
     let latest: Dict<str, Version> = Dict::new();
     for k in names { latest.insert(k, pick_latest(by_name[k])); }
     let rdeps: Dict<str, List<RDep>> = Dict::new();
@@ -715,22 +803,24 @@ pub fn load(dir: str, r: Readmes) -> Index {
     let published = version_dates(dir);
     for k in names {
         let vs = by_name[k];
-        for i in 0..vs.len() { vs[i].date = published.get(k + "@" + vs[i].vers) ?? ""; }
-        latest[k].date = published.get(k + "@" + latest[k].vers) ?? "";
+        for i in 0..vs.len() { vs[i].date = published.get(k + "@" + vs[i].version) ?? ""; }
+        latest[k].date = published.get(k + "@" + latest[k].version) ?? "";
     }
     let stones: List<Stone> = List::new();
     for k in names {
         let l = latest[k];
         let (t, d) = dates.get(files[k]) ?? (0i64, "");
         let s = shown(r, k, files[k], by_name[k], l, rdeps.get(k) ?? List::new(), t, d);
+        s.owners = data.owners.get(key_of(k)) ?? List::new();
         let vs: List<Version> = List::new();
         for v in by_name[k] { vs.push(v); }
-        vs.sort_by(|a: Version, b: Version| cmp_vers(b.vers, a.vers));
+        vs.sort_by(|a: Version, b: Version| cmp_vers(b.version, a.version));
         let views: List<Stone> = List::new();
         for v in vs {
-            let x = if v.vers == l.vers { again(s) } else { shown(r, k, files[k], by_name[k], v, s.rdeps, t, d) };
-            x.at = v.vers;
-            x.top = l.vers;
+            let x = if v.version == l.version { again(s) } else { shown(r, k, files[k], by_name[k], v, s.rdeps, t, d) };
+            x.owners = s.owners;
+            x.at = v.version;
+            x.top = l.version;
             views.push(x);
         }
         s.views = views;
@@ -768,6 +858,12 @@ fn manifests() {
     expect(m.keywords.len() == 2 && m.authors.len() == 1 && m.authors[0] == "Ann Lee", "lists");
     expect(m.homepage.is_empty() && m.documentation == "https://x.org/doc", "links");
     expect(meta_of("not rokon").keywords.is_empty(), "bad manifest");
+    // As published, the manifest filling what was not sent.
+    let sent = meta::empty();
+    sent.license = "MIT";
+    sent.categories = ["science"];
+    let both = shown_meta(meta::over(sent, manifest_meta("Package { license: \"Zlib\", description: \"Shapes\" }")));
+    expect(both.license == "MIT" && both.description == "Shapes" && both.categories[0] == "science", "published over manifest");
 }
 
 #[test]
@@ -779,11 +875,12 @@ fn shards() {
 
 #[test]
 fn lines() {
-    let (name, v) = try parse_line("Stone { name: \"geom\", vers: \"0.3.1\", deps: [{ name: \"num\", req: \"^1.2\", kind: \"normal\" }], source: Dep::git(\"https://github.com/o/geom\", rev: \"4f0c2a9e1b7d3c58a6e09f21d4b8c7a3e5f60123\"), cksum: \"x\", yanked: false, license: \"MIT\" }") catch e { panic(e.msg); };
-    expect(name == "geom" && v.vers == "0.3.1" && v.deps.len() == 1 && v.deps[0].req == "^1.2", "fields");
-    expect(v.license == "MIT" && v.description.is_empty() && v.features.is_empty(), "meta");
+    let (name, v) = try parse_line("Stone { name: \"geom\", version: \"0.3.1\", deps: [{ name: \"num\", req: \"^1.2\", kind: \"normal\" }], source: Dep::git(\"https://github.com/o/geom\", rev: \"4f0c2a9e1b7d3c58a6e09f21d4b8c7a3e5f60123\"), tree: \"x\", yanked: false, toolchain: \"0.2\", links: \"z\" }") catch e { panic(e.msg); };
+    expect(name == "geom" && v.version == "0.3.1" && v.deps.len() == 1 && v.deps[0].req == "^1.2", "fields");
+    expect(v.toolchain == "0.2" && v.links == "z" && v.license.is_empty() && v.features.is_empty(), "toolchain, links");
+    expect(line_key("Stone { name: \"geom\", vers: \"0.1.0\" }") == "geom@0.1.0" && line_key("Stone { name: \"geom\", version: \"0.2.0\" }") == "geom@0.2.0", "history keys");
     expect(v.url == "https://github.com/o/geom" && !v.yanked, "source");
-    let bad = try parse_line("Stone { name: \"x\", vers: \"1.0.0\", deps: [], source: Dep::path(\"..\"), cksum: \"\", yanked: false }") catch _ { ("", v) };
+    let bad = try parse_line("Stone { name: \"x\", version: \"1.0.0\", deps: [], source: Dep::path(\"..\"), tree: \"\", yanked: false }") catch _ { ("", v) };
     expect(bad.0.is_empty(), "path source rejected");
     expect(repo_link("https://github.com/o/r.git", "abc", "docs/a.md") == "https://github.com/o/r/blob/abc/docs/a.md", "blob link");
     expect(repo_link("https://github.com/o/r", "abc", "./img/x.PNG") == "https://github.com/o/r/raw/abc/img/x.PNG", "raw link");

@@ -240,7 +240,7 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
 #[derive(Rokon)]
 pub struct Row {
     pub name: str;
-    pub vers: str;
+    pub version: str;
     pub desc: str;
     pub keywords: List<str>;
     pub yanked: bool;
@@ -250,7 +250,7 @@ pub struct Row {
 }
 
 pub fn row_of(s: Stone) -> Row {
-    Row { name: s.name, vers: s.latest.vers, desc: s.desc, keywords: s.meta.keywords, yanked: s.latest.yanked, time: s.time, date: s.date }
+    Row { name: s.name, version: s.latest.version, desc: s.desc, keywords: s.meta.keywords, yanked: s.latest.yanked, time: s.time, date: s.date }
 }
 
 /// A search result: how well it matched and where.
@@ -356,7 +356,7 @@ fn stone_row(s: Row, note: str, terms: List<str> = List::new(), why: str = "") -
     let gone = if s.yanked { " <span class=\"tag\">yanked</span>" } else { "" };
     let matched = if why.is_empty() { "" } else { f"<span class=\"why\">matches {why}</span>" };
     let when = if !note.is_empty() { f"<span class=\"when\">{note}</span>" } else if s.date.is_empty() { "<span class=\"when\"></span>" } else { f"<time class=\"when\" datetime=\"{esc(s.date)}\">{esc(s.date)}</time>" };
-    f"<li{if s.yanked { " class=\"yanked\"" } else { "" }}><a class=\"st\" href=\"{href}\">{glyph(s.name, 34, "gl")}<span class=\"main\"><span class=\"nl\"><b class=\"nm\">{marked(s.name, terms)}</b>{gone}{matched}</span>{desc}</span><span class=\"ver\">{esc(s.vers)}</span>{when}</a></li>"
+    f"<li{if s.yanked { " class=\"yanked\"" } else { "" }}><a class=\"st\" href=\"{href}\">{glyph(s.name, 34, "gl")}<span class=\"main\"><span class=\"nl\"><b class=\"nm\">{marked(s.name, terms)}</b>{gone}{matched}</span>{desc}</span><span class=\"ver\">{esc(s.version)}</span>{when}</a></li>"
 }
 
 fn stone_rows(xs: List<Stone>, empty: str, dependents: bool = false) -> str {
@@ -369,8 +369,8 @@ fn stone_rows(xs: List<Stone>, empty: str, dependents: bool = false) -> str {
 }
 
 pub fn landing(site: Site, all: List<Stone>) -> str {
-    let vers = 0usize;
-    for s in all { vers += s.versions.len(); }
+    let nv = 0usize;
+    for s in all { nv += s.versions.len(); }
 
     let recent: List<Stone> = List::new();
     for s in all { recent.push(s); }
@@ -407,7 +407,7 @@ pub fn landing(site: Site, all: List<Stone>) -> str {
 </section>
 <div class=\"frame home\">
 <div>
-<section aria-labelledby=\"recent\" class=\"block\"><div class=\"list-head\"><h2 class=\"t-h3\" id=\"recent\">Recently updated</h2><span class=\"t-small\">{plural(all.len(), "stone", "stones")}, {plural(vers, "version", "versions")} · <a href=\"/stones\">see all</a></span></div>
+<section aria-labelledby=\"recent\" class=\"block\"><div class=\"list-head\"><h2 class=\"t-h3\" id=\"recent\">Recently updated</h2><span class=\"t-small\">{plural(all.len(), "stone", "stones")}, {plural(nv, "version", "versions")} · <a href=\"/stones\">see all</a></span></div>
 {stone_rows(rs, "No stones published yet.")}</section>
 {most}</div>
 <aside class=\"side-notes\">
@@ -526,7 +526,7 @@ pub fn guide(doc: markdown::Doc) -> str {
 fn sorted_versions(s: Stone) -> List<Version> {
     let xs: List<Version> = List::new();
     for v in s.versions { xs.push(v); }
-    xs.sort_by(|a: Version, b: Version| stones::cmp_vers(b.vers, a.vers));
+    xs.sort_by(|a: Version, b: Version| stones::cmp_vers(b.version, a.version));
     xs
 }
 
@@ -548,13 +548,14 @@ fn stone_head(s: Stone, tab: str) -> str {
     // One plain line for narrow screens, where the side panel comes last.
     let sum: List<str> = List::new();
     if !l.date.is_empty() { sum.push(f"published <time datetime=\"{esc(l.date)}\">{esc(l.date)}</time>"); }
-    if !l.license.is_empty() { sum.push(esc(l.license)); }
+    if !s.meta.license.is_empty() { sum.push(esc(s.meta.license)); }
     sum.push(plural(count_deps(l, "normal"), "dependency", "dependencies"));
     let about = if s.desc.is_empty() { "" } else { f"<p class=\"t-lead\">{esc(s.desc)}</p>" };
     let home = esc(url(stone_out(s.name)));
     let notice = if !s.at.is_empty() && s.at != s.top {
         let which = if stones::cmp_vers(s.at, s.top) == Ordering::Less { "an old version" } else { "not the latest release" };
-        let gone = if l.yanked { " It is yanked: projects that pinned it keep building, new ones will not resolve it." } else { "" };
+        let who = if l.yanked_by.is_empty() { "" } else { f" by {esc(l.yanked_by)}" };
+        let gone = if l.yanked { f" It is yanked{who}: projects that pinned it keep building, new ones will not resolve it." } else { "" };
         f"<p class=\"callout help\"><span class=\"lab\">{if l.yanked { "yanked" } else { "old version" }}</span><span>This is {which} of {esc(s.name)}; the latest is <a href=\"{home}\">{esc(s.top)}</a>.{gone}</span></p>"
     } else if l.yanked {
         "<p class=\"callout help\"><span class=\"lab\">yanked</span><span>Every version is yanked. Projects that pinned one in <code class=\"ic\">rok.lock</code> keep building; new ones will not resolve this stone.</span></p>"
@@ -583,7 +584,7 @@ fn stone_head(s: Stone, tab: str) -> str {
     if !tree.is_empty() { tabs.push_str(f"<a href=\"{esc(tree)}\">Source <span aria-hidden=\"true\">↗</span></a>"); }
     f"<div class=\"frame stone-head\">
 <nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/stones\">stones</a> / {crumbs(s, tab)}</nav>
-<div class=\"title\"><span class=\"gl-box\" style=\"--h:{hue(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.vers)}</span></div>{about}</div></div>
+<div class=\"title\"><span class=\"gl-box\" style=\"--h:{hue(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.version)}</span></div>{about}</div></div>
 <p class=\"sum t-small\"><span>{sum.join("</span> · <span>")}</span></p>
 {notice}{inst}<div class=\"tabs-line\"><nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav></div>
 </div>
@@ -612,8 +613,8 @@ fn install_box(s: Stone, id: str) -> str {
     if l.yanked { return if s.at.is_empty() { "<p class=\"t-ui muted\">Not installable: every version is yanked.</p>" } else { "<p class=\"t-ui muted\">Not installable: this version is yanked.</p>" }; }
     // An old version is asked for exactly.
     let old = !s.at.is_empty() && s.at != s.top;
-    let req = if old { "=" + l.vers } else { stones::add_req(l.vers) };
-    let add = if old || stones::is_pre(l.vers) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
+    let req = if old { "=" + l.version } else { stones::add_req(l.version) };
+    let add = if old || stones::is_pre(l.version) { f"rok add {s.name}@{req}" } else { f"rok add {s.name}" };
     // As `rok add` writes it into a multi-line rok.rokon.
     let manifest = f"deps: {{\n    \"{s.name}\": Dep::version(\"{req}\"),\n}},";
     // From the stone's own API (apidoc::import_line), shown under both tabs.
@@ -625,14 +626,31 @@ fn install_box(s: Stone, id: str) -> str {
 </div>"
 }
 
+/// A GitHub login, linked to its profile.
+fn login_link(login: str) -> str { f"<a href=\"https://github.com/{esc(http::pct_encode(login))}\">{esc(login)}</a>" }
+
 fn side(site: Site, s: Stone) -> str {
     let l = s.latest;
-    let repo = stones::web_of(l.url);
-    let shown = esc(l.url.replace("https://", "").strip_suffix(".git") ?? l.url.replace("https://", "")).replace("/", "/<wbr>");
+    let m = s.meta;
+    // The manifest's `repository` when it gives one, else the source.
+    let src = if m.repository.is_empty() { l.url } else { m.repository };
+    let repo = if m.repository.is_empty() { stones::web_of(l.url) } else { m.repository };
+    let shown = esc(src.replace("https://", "").strip_suffix(".git") ?? src.replace("https://", "")).replace("/", "/<wbr>");
     let repo_html = if repo.is_empty() { f"<code>{shown}</code>" } else { f"<a href=\"{esc(repo)}\">{shown}</a>" };
     let kv = StrBuf::new();
-    if !l.date.is_empty() { kv.push_str(f"<dt>Published</dt><dd><time datetime=\"{esc(l.date)}\">{esc(l.date)}</time></dd>"); }
-    if !l.license.is_empty() { kv.push_str(f"<dt>License</dt><dd>{esc(l.license)}</dd>"); }
+    if !l.date.is_empty() || !l.by.is_empty() {
+        let when = if l.date.is_empty() { "" } else { f"<time datetime=\"{esc(l.date)}\">{esc(l.date)}</time>" };
+        let who = if l.by.is_empty() { "" } else { f"{if when.is_empty() { "by" } else { " by" }} {login_link(l.by)}" };
+        kv.push_str(f"<dt>Published</dt><dd>{when}{who}</dd>");
+    }
+    if !s.owners.is_empty() {
+        let os: List<str> = List::new();
+        for o in s.owners { os.push(login_link(o)); }
+        kv.push_str(f"<dt>{if os.len() == 1 { "Owner" } else { "Owners" }}</dt><dd>{os.join(", ")}</dd>");
+    }
+    if !m.license.is_empty() { kv.push_str(f"<dt>License</dt><dd>{esc(m.license)}</dd>"); }
+    if !l.toolchain.is_empty() { kv.push_str(f"<dt>Toolchain</dt><dd class=\"mono\">rok {esc(l.toolchain)}</dd>"); }
+    if !m.links.is_empty() { kv.push_str(f"<dt>Links</dt><dd title=\"The native library it links\"><code class=\"ic\">{esc(m.links)}</code></dd>"); }
     let nd = count_deps(l, "normal");
     if nd == 0 {
         kv.push_str("<dt>Dependencies</dt><dd>None</dd>");
@@ -645,11 +663,15 @@ fn side(site: Site, s: Stone) -> str {
         }
         kv.push_str(f"<dt>Dependencies</dt><dd>{ds.join(", ")}</dd>");
     }
-    let m = s.meta;
     if !m.keywords.is_empty() {
         let ks: List<str> = List::new();
         for k in m.keywords { ks.push(f"<a href=\"/stones?q={esc(http::pct_encode(k))}\">{esc(k)}</a>"); }
         kv.push_str(f"<dt>Keywords</dt><dd class=\"kws\">{ks.join(" ")}</dd>");
+    }
+    if !m.categories.is_empty() {
+        let cs: List<str> = List::new();
+        for c in m.categories { cs.push(esc(c)); }
+        kv.push_str(f"<dt>{if cs.len() == 1 { "Category" } else { "Categories" }}</dt><dd>{cs.join(", ")}</dd>");
     }
     if !m.authors.is_empty() {
         let au: List<str> = List::new();
@@ -668,17 +690,17 @@ fn side(site: Site, s: Stone) -> str {
     for v in vs {
         if k == 5 { break; }
         k += 1;
-        let mark = if v.vers == (if s.at.is_empty() { l.vers } else { s.top }) && !v.yanked { "<span class=\"dot\" title=\"latest\"></span>" } else { "<span class=\"dot off\"></span>" };
-        let tag = if v.yanked { "<span class=\"tag\">yanked</span>" } else if stones::is_pre(v.vers) { "<span class=\"tag\">pre-release</span>" } else { "" };
+        let mark = if v.version == (if s.at.is_empty() { l.version } else { s.top }) && !v.yanked { "<span class=\"dot\" title=\"latest\"></span>" } else { "<span class=\"dot off\"></span>" };
+        let tag = if v.yanked { "<span class=\"tag\">yanked</span>" } else if stones::is_pre(v.version) { "<span class=\"tag\">pre-release</span>" } else { "" };
         let when = if v.date.is_empty() { "" } else { f"<time class=\"c\" datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
-        let cur = if v.vers == s.at { " aria-current=\"page\"" } else { "" };
-        vb.push_str(f"<li{if v.yanked { " class=\"yanked\"" } else { "" }}>{mark}<a class=\"v\" href=\"{esc(url(ver_out(s.name, v.vers)))}\"{cur}>{esc(v.vers)}</a>{tag}{when}</li>");
+        let cur = if v.version == s.at { " aria-current=\"page\"" } else { "" };
+        vb.push_str(f"<li{if v.yanked { " class=\"yanked\"" } else { "" }}>{mark}<a class=\"v\" href=\"{esc(url(ver_out(s.name, v.version)))}\"{cur}>{esc(v.version)}</a>{tag}{when}</li>");
     }
     let more = if s.versions.len() > 5 { f"<a href=\"{esc(url(tab_out(s.name, "versions")))}\" class=\"t-ui\">All {s.versions.len()} versions</a>" } else { "" };
     f"<aside class=\"meta\" aria-label=\"Stone details\">
 <section class=\"inst-side\"><h2 class=\"t-label\">Install</h2>{install_box(s, "i")}</section>
-<dl class=\"kv\">{kv.to_str()}<dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd class=\"mono\">{commit_link(l)}</dd><dt>Tree hash</dt><dd class=\"mono\"><code title=\"{esc(l.cksum)}\">{short(l.cksum)}</code></dd><dt>Index file</dt><dd class=\"mono\"><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\">{esc(s.file)}</a></dd></dl>
-<section class=\"vers\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{dates_note(s)}{more}</section>
+<dl class=\"kv\">{kv.to_str()}<dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd class=\"mono\">{commit_link(l)}</dd><dt>Tree hash</dt><dd class=\"mono\"><code title=\"{esc(l.tree)}\">{short(l.tree)}</code></dd><dt>Index file</dt><dd class=\"mono\"><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\">{esc(s.file)}</a></dd></dl>
+<section class=\"version\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{dates_note(s)}{more}</section>
 </aside>
 "
 }
@@ -728,7 +750,7 @@ pub fn api_page(site: Site, s: Stone) -> str {
     let link = |h: str| stones::repo_link(l.url, l.rev, h);
     let syms = apidoc::symbols(s.api);
     let n = apidoc::count(s.api);
-    let main = f"<p class=\"t-ui muted\">The public items of {esc(s.name)} {esc(l.vers)} and their doc comments, read from its source at {commit_link(l)}. Signatures are shown as written.</p>
+    let main = f"<p class=\"t-ui muted\">The public items of {esc(s.name)} {esc(l.version)} and their doc comments, read from its source at {commit_link(l)}. Signatures are shown as written.</p>
 <details class=\"syms-m grow\"><summary>Symbols <span class=\"ct\">{n}</span></summary><nav class=\"syms\" aria-label=\"Symbols\">{syms}</nav></details>
 <div class=\"api\">{apidoc::body(s.api, link)}</div>
 ";
@@ -748,16 +770,20 @@ pub fn versions_page(site: Site, s: Stone) -> str {
     let b = StrBuf::new();
     for v in sorted_versions(s) {
         let tags = StrBuf::new();
-        if v.vers == s.latest.vers && !v.yanked { tags.push_str("<span class=\"tag acc\">latest</span>"); }
-        let page = esc(url(ver_out(s.name, v.vers)));
-        if v.yanked { tags.push_str("<span class=\"tag\">yanked</span>"); }
-        if stones::is_pre(v.vers) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
+        if v.version == s.latest.version && !v.yanked { tags.push_str("<span class=\"tag acc\">latest</span>"); }
+        let page = esc(url(ver_out(s.name, v.version)));
+        if v.yanked {
+            let by = if v.yanked_by.is_empty() { "" } else { f" title=\"yanked by {esc(v.yanked_by)}\"" };
+            tags.push_str(f"<span class=\"tag\"{by}>yanked</span>");
+        }
+        if stones::is_pre(v.version) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
         let when = if v.date.is_empty() { "<span class=\"muted\">unknown</span>" } else { f"<time datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
-        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><a class=\"v\" href=\"{page}\">{esc(v.vers)}</a>{tags.to_str()}</td><td>{when}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.cksum)}\">{short(v.cksum)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
+        let who = if v.by.is_empty() { "<span class=\"muted\">unknown</span>" } else { login_link(v.by) };
+        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><a class=\"v\" href=\"{page}\">{esc(v.version)}</a>{tags.to_str()}</td><td>{when}</td><td>{who}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.tree)}\">{short(v.tree)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
     }
     let body = f"<h2 class=\"t-h3\">{plural(s.versions.len(), "version", "versions")}</h2>
 <p class=\"t-ui muted\">Newest first. Published is the date the version's line was added to the index. A yanked version stays in the index for the projects that pinned it; new resolves skip it.</p>
-<div class=\"table-wrap\"><table class=\"tbl\"><thead><tr><th scope=\"col\">Version</th><th scope=\"col\">Published</th><th scope=\"col\">Commit</th><th scope=\"col\">Tree hash</th><th scope=\"col\">License</th></tr></thead><tbody>{b.to_str()}</tbody></table></div>
+<div class=\"table-wrap\"><table class=\"tbl\"><thead><tr><th scope=\"col\">Version</th><th scope=\"col\">Published</th><th scope=\"col\">By</th><th scope=\"col\">Commit</th><th scope=\"col\">Tree hash</th><th scope=\"col\">License</th></tr></thead><tbody>{b.to_str()}</tbody></table></div>
 ";
     stone_frame(site, s, "versions", body)
 }
@@ -787,7 +813,7 @@ pub fn deps_page(site: Site, s: Stone, have: Set<str>) -> str {
     let deps = dep_rows(have, l.deps, "normal");
     let dev = dep_rows(have, l.deps, "dev");
     let b = StrBuf::new();
-    b.push_str(f"<h2 class=\"t-h3\">Dependencies of {esc(l.vers)}</h2>\n");
+    b.push_str(f"<h2 class=\"t-h3\">Dependencies of {esc(l.version)}</h2>\n");
     b.push_str(if deps.is_empty() { "<p class=\"empty\">None. This stone builds on the standard library alone.</p>\n" } else { dep_table(deps) });
     if !dev.is_empty() { b.push_str(f"<h2 class=\"t-h3\">Dev dependencies</h2>\n<p class=\"t-ui muted\">Used by its tests and examples only.</p>\n{dep_table(dev)}"); }
     if !l.features.is_empty() {
@@ -826,7 +852,7 @@ pub fn not_found() -> str {
 
 #[cfg(test)]
 fn row(name: str, desc: str, kws: List<str>, time: i64) -> Row {
-    Row { name: name, vers: "0.1.0", desc: desc, keywords: kws, yanked: false, time: time, date: "" }
+    Row { name: name, version: "0.1.0", desc: desc, keywords: kws, yanked: false, time: time, date: "" }
 }
 
 #[test]

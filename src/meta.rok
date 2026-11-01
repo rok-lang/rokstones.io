@@ -1,0 +1,116 @@
+// What the index does not hold: a version's descriptive metadata, sent
+// with the publish and kept in the data file, and who published, yanked
+// and unyanked it.
+
+use rok::std::rokon;
+use rok::std::rokon::Value;
+
+/// The manifest's descriptive fields; `""` / empty / `none`: not given.
+#[derive(Rokon)]
+pub struct Meta {
+    pub description: str = "";
+    /// An SPDX expression.
+    pub license: str = "";
+    /// A path in the stone's tree.
+    pub license_file: str = "";
+    /// `Name <email>` each.
+    pub authors: List<str> = List::new();
+    pub homepage: str = "";
+    pub documentation: str = "";
+    pub repository: str = "";
+    /// A path in the stone's tree.
+    pub readme: str = "";
+    pub keywords: List<str> = List::new();
+    pub categories: List<str> = List::new();
+    pub include: List<str> = List::new();
+    pub exclude: List<str> = List::new();
+    /// `true`, `false`, or the registries it may be published to.
+    pub publish: Value = Value::None;
+    /// The free-form `metadata` table.
+    pub metadata: Value = Value::None;
+    /// The native library it links, from the index entry.
+    pub links: str = "";
+    pub default_run: str = "";
+}
+
+pub fn empty() -> Meta { try! rokon::from_str("Meta {}") }
+
+/// An account at a moment: who did something, and when (unix seconds).
+#[derive(Rokon)]
+pub struct Actor {
+    pub id: i64;
+    pub login: str;
+    pub at: i64;
+}
+
+/// One published version. `name` is `index::key`, `native/` prefixed for
+/// native packages. Versions published before the server kept these
+/// have no `published_by`.
+#[derive(Rokon)]
+pub struct Release {
+    pub name: str;
+    pub version: str;
+    pub meta: Meta;
+    pub published_by: Actor | none;
+    pub yanked_by: Actor | none;
+    pub unyanked_by: Actor | none;
+}
+
+fn given(v: Value) -> bool {
+    match v {
+        Value::None => false,
+        Value::Str(s) => !s.is_empty(),
+        Value::List(xs) => !xs.is_empty(),
+        _ => true,
+    }
+}
+
+/// `m` as a record of the fields it has, for the API.
+pub fn to_value(m: Meta) -> Value {
+    let out: OrderedDict<str, Value> = OrderedDict::new();
+    if let Value::Struct { name: _, fields } = rokon::encode(m) {
+        for (k, v) in fields {
+            if given(v) { out.insert(k, v); }
+        }
+    }
+    Value::Struct { name: none, fields: out }
+}
+
+/// `m`'s fields with the empty ones taken from `under`.
+pub fn over(m: Meta, under: Meta) -> Meta {
+    let a = rokon::encode(m);
+    let b = rokon::encode(under);
+    if let Value::Struct { name: n, fields: fa } = a {
+        if let Value::Struct { name: _, fields: fb } = b {
+            for (k, v) in fb {
+                if !given(fa.get(k) ?? Value::None) { fa.insert(k, v); }
+            }
+            return try rokon::decode(Value::Struct { name: n, fields: fa }, "Meta") catch _ { m };
+        }
+    }
+    m
+}
+
+#[cfg(test)]
+fn expect(ok: bool, what: str) {
+    if !ok { panic(what); }
+}
+
+#[test]
+fn records() {
+    let m = empty();
+    m.description = "d";
+    m.keywords = ["a"];
+    let u = empty();
+    u.description = "x";
+    u.license = "MIT";
+    let o = over(m, u);
+    expect(o.description == "d" && o.license == "MIT" && o.keywords.len() == 1, "over");
+    let flat = rokon::write::flat(to_value(o));
+    expect(flat == "{ description: \"d\", license: \"MIT\", keywords: [\"a\"] }", flat);
+    let r = Release { name: "geom", version: "0.1.0", meta: o, published_by: Actor { id: 1i64, login: "a", at: 2i64 }, yanked_by: none, unyanked_by: none };
+    let back: Release = try rokon::from_str(rokon::to_string(r)) catch e { panic(f"{e}"); };
+    expect(back.meta.license == "MIT" && back.yanked_by is none, "round trip");
+    let old: Release = try rokon::from_str("Release { name: \"x\", version: \"1.0.0\", meta: Meta {} }") catch e { panic(f"{e}"); };
+    expect(old.published_by is none && old.meta.description.is_empty(), "defaults");
+}

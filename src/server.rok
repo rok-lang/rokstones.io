@@ -26,7 +26,10 @@ use web::http::Request;
 use web::url;
 use pkg::index;
 use pkg::index::ApiError;
+use pkg::stones;
 use pkg::secret;
+use pkg::meta;
+use pkg::meta::{Release, Actor};
 
 static LOCK: Mutex<i32> = Mutex::new(0);
 static STALE: Atomic<i32> = Atomic::new(0);
@@ -146,14 +149,31 @@ pub struct Db {
     pub sessions: List<Session>;
     pub tokens: List<Token>;
     pub owners: List<Owner>;
+    /// Every version published, yanked or unyanked through the API, and
+    /// the metadata of versions from before it (migrate-index).
+    pub releases: List<Release> = List::new();
 }
 
-fn db_path(cfg: Cfg) -> str { cfg.data + "/db.rokon" }
+fn load_db(cfg: Cfg) throws -> Db { try read_db(cfg.data) }
 
-fn load_db(cfg: Cfg) throws -> Db {
-    let p = db_path(cfg);
-    if !fs::exists(p) { return Db { accounts: List::new(), sessions: List::new(), tokens: List::new(), owners: List::new() }; }
+/// `dir/db.rokon`; empty when there is none.
+pub fn read_db(dir: str) throws -> Db {
+    let p = dir + "/db.rokon";
+    if !fs::exists(p) { return Db { accounts: List::new(), sessions: List::new(), tokens: List::new(), owners: List::new(), releases: List::new() }; }
     try rokon::from_str(try fs::read_to_str(p))
+}
+
+/// `dir/db.rokon` written whole (sessions kept as they are).
+pub fn write_db(dir: str, db: Db) throws { try fs::write_atomic(dir + "/db.rokon", rokon::to_string(db) + "\n"); }
+
+/// Where `db.releases` has `k` (`index::key`, `native/` prefixed) at
+/// `version`; a record is added when there is none.
+pub fn release_at(db: Db, k: str, version: str) -> usize {
+    for i in 0..db.releases.len() {
+        if db.releases[i].name == k && db.releases[i].version == version { return i; }
+    }
+    db.releases.push(Release { name: k, version: version, meta: meta::empty(), published_by: none, yanked_by: none, unyanked_by: none });
+    db.releases.len() - 1
 }
 
 fn save_db(cfg: Cfg, db: Db) throws {
@@ -163,7 +183,7 @@ fn save_db(cfg: Cfg, db: Db) throws {
         if s.expires > now { live.push(s); }
     }
     db.sessions = live;
-    try fs::write_atomic(db_path(cfg), rokon::to_string(db) + "\n");
+    try write_db(cfg.data, db);
 }
 
 fn now_secs() -> i64 { try SystemTime::now().unix_seconds() catch _ { 0i64 } }
@@ -571,7 +591,7 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
 #[derive(Rokon)]
 pub struct Yank {
     pub name: str;
-    pub vers: str;
+    pub version: str;
     pub undo: bool = false;
     pub native: bool = false;
 }
@@ -584,7 +604,55 @@ fn api_route(cfg: Cfg, r: Request) -> Resp {
     out
 }
 
+fn actor_value(a: Actor | none) -> Value {
+    match a {
+        x: Actor => rokon::encode(x),
+        none => Value::None,
+    }
+}
+
+/// `GET /api/v1/stones/<name>` and `/api/v1/native/<name>`: the owners,
+/// and each version in the index with its metadata and who published,
+/// yanked and unyanked it. No token needed.
+fn stone_info(cfg: Cfg, db: Db, native: bool, name: str) throws (ApiError) -> Resp {
+    if !stones::is_name(name) { throw index::err(404, f"`{name}` is not a stone name"); }
+    let k = (if native { "native/" } else { "" }) + index::key(name);
+    let vs = try index::releases(cfg.index, native, name);
+    if vs.is_empty() { throw index::err(404, f"{if native { "native package" } else { "stone" }} `{name}` is not in the index"); }
+    let owners: List<Value> = List::new();
+    for id in owners_of(db, k) ?? List::new() {
+        let a = account(db, id) ?? Account { id: id, login: "", created: 0i64 };
+        let f: OrderedDict<str, Value> = OrderedDict::new();
+        f.insert("id", Value::Int(Int::from(a.id)));
+        f.insert("login", Value::Str(a.login));
+        owners.push(Value::Struct { name: none, fields: f });
+    }
+    let list: List<Value> = List::new();
+    for (v, yanked) in vs {
+        let rel = Release { name: k, version: v, meta: meta::empty(), published_by: none, yanked_by: none, unyanked_by: none };
+        for r in db.releases {
+            if r.name == k && r.version == v { rel = r; }
+        }
+        let f: OrderedDict<str, Value> = OrderedDict::new();
+        f.insert("version", Value::Str(v));
+        f.insert("yanked", Value::Bool(yanked));
+        f.insert("meta", meta::to_value(rel.meta));
+        f.insert("published_by", actor_value(rel.published_by));
+        f.insert("yanked_by", actor_value(rel.yanked_by));
+        f.insert("unyanked_by", actor_value(rel.unyanked_by));
+        list.push(Value::Struct { name: "Version", fields: f });
+    }
+    rokon_resp(200, "Stone", [("name", Value::Str(name)), ("native", Value::Bool(native)), ("owners", Value::List(owners)), ("versions", Value::List(list))])
+}
+
 fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
+    for (prefix, native) in [("/api/v1/stones/", false), ("/api/v1/native/", true)] {
+        if let name: str = r.path.strip_prefix(prefix) {
+            if r.method != "GET" && r.method != "HEAD" { throw index::err(405, f"use GET {prefix}<name>"); }
+            let db = try load_db(cfg) catch e { throw index::err(500, f"data: {e}"); };
+            return try stone_info(cfg, db, native, http::pct_decode(name, false) ?? name);
+        }
+    }
     let routes: List<(str, str)> = [("GET", "/api/v1/me"), ("POST", "/api/v1/publish"), ("POST", "/api/v1/yank")];
     let known = false;
     for (m, p) in routes {
@@ -608,8 +676,10 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     if !admin { throw index::err(403, "Publishing is not open yet"); }
     let who = f"{a.login} <{a.id}+{a.login}@users.noreply.github.com>";
     try index::sync(cfg.index);
+    let by = Actor { id: a.id, login: a.login, at: now_secs() };
     if r.path == "/api/v1/publish" {
-        let e = try index::parse_entry(r.body);
+        let p = try index::parse_publish(r.body);
+        let e = p.entry;
         let k = (if e.native { "native/" } else { "" }) + index::key(e.name);
         let owners = owners_of(db, k);
         if !may_publish(owners, try index::exists(cfg.index, e.native, e.name), a.id, admin) {
@@ -617,19 +687,25 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
         }
         try index::check_source(cfg.data + "/sources", e);
         try index::publish(cfg.index, e, who);
-        if owners is none {
-            db.owners.push(Owner { name: k, accounts: [a.id] });
-            try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
-        }
+        if owners is none { db.owners.push(Owner { name: k, accounts: [a.id] }); }
+        let i = release_at(db, k, e.version);
+        db.releases[i].meta = p.meta;
+        db.releases[i].published_by = by;
+        try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
         STALE.store(1);
-        return rokon_resp(200, "Published", [("name", Value::Str(e.name)), ("vers", Value::Str(e.vers)), ("file", Value::Str(e.file))]);
+        return rokon_resp(200, "Published", [("name", Value::Str(e.name)), ("version", Value::Str(e.version)), ("file", Value::Str(e.file))]);
     }
-    let y: Yank = try rokon::from_str(r.body) catch e { throw index::err(400, f"the body is `Yank {{ name: .., vers: .., undo: false, native: false }}`: {e}"); };
+    let y: Yank = try rokon::from_str(r.body) catch e { throw index::err(400, f"the body is `Yank {{ name: .., version: .., undo: false, native: false }}`: {e}"); };
     let k = (if y.native { "native/" } else { "" }) + index::key(y.name);
     if !may_publish(owners_of(db, k), true, a.id, admin) { throw index::err(403, f"`{y.name}` belongs to other accounts"); }
-    let changed = try index::yank(cfg.index, y.name, y.vers, !y.undo, y.native, who);
-    if changed { STALE.store(1); }
-    rokon_resp(200, "Yanked", [("name", Value::Str(y.name)), ("vers", Value::Str(y.vers)), ("yanked", Value::Bool(!y.undo))])
+    let changed = try index::yank(cfg.index, y.name, y.version, !y.undo, y.native, who);
+    if changed {
+        let i = release_at(db, k, y.version);
+        if y.undo { db.releases[i].unyanked_by = by; } else { db.releases[i].yanked_by = by; }
+        try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
+        STALE.store(1);
+    }
+    rokon_resp(200, "Yanked", [("name", Value::Str(y.name)), ("version", Value::Str(y.version)), ("yanked", Value::Bool(!y.undo))])
 }
 
 /// An OG card asked for by the version render.mjs drew it from (the `.v`
@@ -836,14 +912,14 @@ fn respond(s: TcpStream, r: Request, status: i32, headers: List<str>, body: List
 /// og/node_modules is installed, draw the new cards with og/render.mjs
 /// and build again so the pages point at them; elsewhere they keep the
 /// site card until a deploy draws them.
-fn rebuild_loop(index_dir: str, out: str) {
+fn rebuild_loop(index_dir: str, data: str, out: str) {
     let exe = try env::current_exe() catch e {
         eprintln(f"cannot find this program to rebuild the site: {e}");
         return;
     };
     loop {
         if STALE.swap(0) == 1 {
-            let st = try Command::new(exe.as_str()).args(["--index", index_dir]).status() catch e {
+            let st = try Command::new(exe.as_str()).args(["--index", index_dir, "--data", data]).status() catch e {
                 eprintln(f"site rebuild: {e}");
                 continue;
             };
@@ -860,7 +936,7 @@ fn rebuild_loop(index_dir: str, out: str) {
                 eprintln(f"og cards: {r}");
                 continue;
             }
-            let again = try Command::new(exe.as_str()).args(["--index", index_dir]).status() catch e {
+            let again = try Command::new(exe.as_str()).args(["--index", index_dir, "--data", data]).status() catch e {
                 eprintln(f"site rebuild: {e}");
                 continue;
             };
@@ -880,9 +956,10 @@ pub fn serve(site: Site) throws {
         eprintln(f"serving {site.out}/ and the API on http://{cfg.addr} for {cfg.url}");
         STALE.store(1);
         let ix = cfg.index;
+        let data = cfg.data;
         let out = site.out;
         let bg = thread::spawn(|| {
-            rebuild_loop(ix, out);
+            rebuild_loop(ix, data, out);
             0
         });
         bg.detach();
@@ -932,7 +1009,7 @@ fn ownership_and_tokens() {
     expect(may_publish([5i64], true, 5i64, false) && !may_publish([6i64], true, 5i64, false), "owners");
     expect(may_publish([6i64], true, 5i64, true), "admins publish any");
     let t = "rks_" + "ab".repeat(32);
-    let db = Db { accounts: List::new(), sessions: List::new(), tokens: [Token { id: "1", name: "n", account: 1i64, hash: secret::sha256_hex(t), created: 0i64, last_used: 0i64 }], owners: List::new() };
+    let db = Db { releases: List::new(), accounts: List::new(), sessions: List::new(), tokens: [Token { id: "1", name: "n", account: 1i64, hash: secret::sha256_hex(t), created: 0i64, last_used: 0i64 }], owners: List::new() };
     expect(token_of(db, t) is Token && token_of(db, t.replace("rks_a", "rks_b")) is none && token_of(db, "ab".repeat(34)) is none, "lookup");
     let back: Db = try rokon::from_str(rokon::to_string(db)) catch e { panic(f"{e}"); };
     expect(back.tokens.len() == 1 && back.tokens[0].hash == db.tokens[0].hash, "data file round trip");
