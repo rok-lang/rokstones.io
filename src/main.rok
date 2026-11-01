@@ -8,6 +8,8 @@
 //   rok run -- --index <dir>     another index checkout
 //   rok run -- --data <dir>      the server's data (db.rokon): metadata, publishers, owners
 //   rok run -- serve             serve the site and the API (see server.rok)
+//   rok run -- migrate-index <index> [<data>]
+//                                rewrite 0.1 index lines to the 0.2 names (migrate.rok)
 
 mod layout;
 mod stones;
@@ -16,6 +18,7 @@ mod index;
 mod server;
 mod apidoc;
 mod meta;
+mod migrate;
 
 use rok::std::env;
 use rok::std::fs;
@@ -292,6 +295,10 @@ fn main() throws {
     let args = env::args();
     if args.len() == 2 && args[1] == "serve" {
         try server::serve(try load_site());
+        return;
+    }
+    if args.len() >= 3 && args.len() <= 4 && args[1] == "migrate-index" {
+        try migrate::run(args[2], if args.len() == 4 { args[3] } else { "" });
         return;
     }
     let strict = false;

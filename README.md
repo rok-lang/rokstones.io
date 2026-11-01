@@ -79,6 +79,15 @@ An index line holds only what resolution needs, named as in the manifest: `name`
 
 Each write runs under one lock: reset to upstream, append (or flip `yanked`), commit as the publishing account, and push; a failed push resets and answers 503. Entry and metadata validation, source fetch and tree-hash checks, and the commit flow are in `src/index.rok`.
 
+An index from before 0.2 (`vers`, `cksum`, descriptive fields in the line) moves to these names once, by hand:
+
+```bash
+rok run -- migrate-index <index checkout> <data dir>   # rewrites the lines, keeps their metadata in db.rokon
+git -C <index checkout> commit -am "Move index lines to the 0.2 field names"
+```
+
+Lines already in the new format are left alone, so a second run changes nothing.
+
 Deploy as its own user with a git identity that can push to the index, behind a TLS proxy:
 
 ```caddy
@@ -104,6 +113,7 @@ Edit `site.rokon` (ROKON). Key fields: `title`, `tagline`, `description`, `index
 | `src/server.rok` | `serve`: settings, `db.rokon`, GitHub login, account page, API, rebuilds |
 | `src/index.rok`  | API entry and metadata checks, index commits and pushes |
 | `src/meta.rok`   | Per-version metadata and publisher records kept in `db.rokon` |
+| `src/migrate.rok` | `migrate-index`: 0.1 index lines to the 0.2 names |
 | `src/secret.rok` | SHA-256, random bytes, constant-time compare |
 | `src/stones.rok` | Reads the index, semver ordering, dependents, version dates, README and source tree fetching |
 | `src/apidoc.rok` | API tab: public items and `///` docs scanned from a stone's sources; the install box's `use` line |
