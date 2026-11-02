@@ -162,7 +162,7 @@ pub struct Readmes {
     pub data: str = "";
 }
 
-/// A package name (spec 9.10.3): lowercase ASCII `[a-z0-9_-]+`, starting with a letter.
+/// A package name: lowercase ASCII `[a-z0-9_-]+`, starting with a letter.
 pub fn is_name(s: str) -> bool {
     if s.is_empty() { return false; }
     let first = true;
