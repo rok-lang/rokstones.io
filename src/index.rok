@@ -9,6 +9,7 @@ use rok::std::rokon::Value;
 use rok::std::process::Command;
 use rok::core::cmp::Ordering;
 use pkg::stones;
+use pkg::meta;
 
 /// A refused request: HTTP status and message.
 pub struct ApiError {
@@ -137,7 +138,7 @@ fn is_hex(s: str, lens: List<usize>) -> bool {
 /// What an API publish adds: the entry's name, version, index file and line.
 pub struct Entry {
     pub name: str;
-    pub vers: str;
+    pub version: str;
     pub native: bool;
     pub file: str;
     pub line: str;
@@ -266,29 +267,75 @@ fn no_cycle(table: Dict<str, List<str>>, name: str, state: Dict<str, i32>) throw
     state.insert(name, 2);
 }
 
-const META: [str; 3] = ["description", "license", "repository"];
+/// A toolchain pin: a version or a prefix of one (`0.2`, `0.2.1`), or a
+/// requirement (`^0.2.1`, `>=0.2, <0.4`).
+pub fn is_toolchain(s: str) -> bool {
+    if s.starts_with("^") || s.starts_with("~") || s.starts_with("=") || s.starts_with("<") || s.starts_with(">") { return is_req(s); }
+    let core = core_of(s) ?? "";
+    let n = 0usize;
+    for p in core.split(".") {
+        if !is_num(p) { return false; }
+        n += 1;
+    }
+    n >= 1 && n <= 3
+}
 
-fn check_meta(f: Dict<str, Value>, what: str) throws (ApiError) {
-    for k in META { _ = try opt_str(f, k, what); }
+/// A native library name (`links`): letters, digits, `_`, `-`, `.`, `+`.
+fn is_lib(s: str) -> bool {
+    if s.is_empty() || s.len() > 64 { return false; }
+    for c in s.chars() {
+        if !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '+') { return false; }
+    }
+    true
+}
+
+/// A dependency's `target`: a target triple, or `cfg(..)` with balanced
+/// parentheses. The client evaluates it; the server only checks its shape.
+fn is_target(s: str) -> bool {
+    if s.is_empty() || s.len() > 256 { return false; }
+    if let inner: str = s.strip_prefix("cfg(") {
+        if !inner.ends_with(")") { return false; }
+        let depth = 1;
+        for c in inner.chars() {
+            if c < ' ' || c > '~' { return false; }
+            if c == '(' { depth += 1; }
+            if c == ')' {
+                depth -= 1;
+                if depth < 0 { return false; }
+            }
+        }
+        return depth == 0 && inner.len() > 1;
+    }
+    if !s.contains("-") { return false; }
+    for c in s.chars() {
+        if !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') { return false; }
+    }
+    true
 }
 
 /// A `Stone { .. }` line, checked.
 fn check_stone(f: Dict<str, Value>) throws (ApiError) -> (str, str) {
-    try only(f, ["name", "vers", "deps", "features", "source", "cksum", "yanked", "description", "license", "repository"], "Stone");
+    try only(f, ["name", "version", "deps", "features", "source", "tree", "yanked", "toolchain", "links"], "Stone");
     // Normal dependencies: whether each is optional.
     let normal: Dict<str, bool> = Dict::new();
     let name = try str_field(f, "name", "Stone");
     try check_name(name, "stone");
-    let vers = try str_field(f, "vers", "Stone");
-    if !is_version(vers) { throw bad(f"`{vers}` is not a version (major.minor.patch)"); }
+    let version = try str_field(f, "version", "Stone");
+    if !is_version(version) { throw bad(f"`{version}` is not a version (major.minor.patch)"); }
     if let d: Value = f.get("deps") {
         let Value::List(xs) = d else { throw bad("`deps` is a list"); };
         for x in xs {
             let q = record(x, "") ?? (record(x, "Req") ?? Dict::new());
             if q.len() == 0 { throw bad("a dependency is `{ name: .., req: .., kind: .. }`"); }
-            try only(q, ["name", "req", "kind", "registry", "optional", "features", "default_features"], "dependency");
+            try only(q, ["name", "req", "kind", "registry", "optional", "features", "default_features", "package", "target"], "dependency");
             let dn = try str_field(q, "name", "dependency");
             try check_name(dn, "dependency");
+            if let pk: str = try opt_str(q, "package", "dependency") {
+                try check_name(pk, "package");
+            }
+            if let t: str = try opt_str(q, "target", "dependency") {
+                if !is_target(t) { throw bad(f"`{dn}`: `{t}` is not a target: a triple (`x86_64-unknown-linux-gnu`) or `cfg(..)`"); }
+            }
             let req = try str_field(q, "req", "dependency");
             if !is_req(req) { throw bad(f"`{req}` is not a version requirement"); }
             let kind = (try opt_str(q, "kind", "dependency")) ?? "normal";
@@ -318,21 +365,26 @@ fn check_stone(f: Dict<str, Value>) throws (ApiError) -> (str, str) {
         }
     }
     if !ok { throw bad("a stone's source is `Dep::git(\"https://..\", rev: \"<commit>\")`"); }
-    let cksum = try str_field(f, "cksum", "Stone");
-    if !is_hex(cksum, [40usize, 64usize]) { throw bad("`cksum` is the commit's git tree hash"); }
+    let tree = try str_field(f, "tree", "Stone");
+    if !is_hex(tree, [40usize, 64usize]) { throw bad("`tree` is the commit's git tree hash"); }
     try not_yanked(f, "Stone");
-    try check_meta(f, "Stone");
-    (name, vers)
+    if let t: str = try opt_str(f, "toolchain", "Stone") {
+        if !is_toolchain(t) { throw bad(f"`{t}` is not a toolchain pin: a version (`0.2`) or a requirement (`^0.2.1`)"); }
+    }
+    if let l: str = try opt_str(f, "links", "Stone") {
+        if !is_lib(l) { throw bad(f"`{l}` is not a native library name"); }
+    }
+    (name, version)
 }
 
 /// A `Native { .. }` value, checked: every build an https archive with
 /// its SHA-256, dependencies on indexed native packages only.
 fn check_native(f: Dict<str, Value>) throws (ApiError) -> (str, str) {
-    try only(f, ["name", "vers", "deps", "targets", "yanked", "description", "license", "repository"], "Native");
+    try only(f, ["name", "version", "deps", "targets", "yanked"], "Native");
     let name = try str_field(f, "name", "Native");
     try check_name(name, "native package");
-    let vers = try str_field(f, "vers", "Native");
-    if !is_version(vers) { throw bad(f"`{vers}` is not a version (major.minor.patch)"); }
+    let version = try str_field(f, "version", "Native");
+    if !is_version(version) { throw bad(f"`{version}` is not a version (major.minor.patch)"); }
     if let d: Value = f.get("deps") {
         let Value::Dict(xs) = d else { throw bad("native `deps` is a dict"); };
         let seen: Set<str> = Set::new();
@@ -389,8 +441,7 @@ fn check_native(f: Dict<str, Value>) throws (ApiError) -> (str, str) {
         }
     }
     try not_yanked(f, "Native");
-    try check_meta(f, "Native");
-    (name, vers)
+    (name, version)
 }
 
 /// `v` on one line, as the client writes an index line.
@@ -398,18 +449,172 @@ fn flat(v: Value) throws (ApiError) -> str {
     try rokon::to_str_flat(v) catch e { throw bad(f"not writable as ROKON: {e}"); }
 }
 
-/// A publish body (`Stone { .. }` or `Native { .. }`), checked on its own.
-pub fn parse_entry(body: str) throws (ApiError) -> Entry {
-    let v = try rokon::parse(body) catch e { throw bad(f"not ROKON: {e}"); };
+/// An index entry (`Stone { .. }` or `Native { .. }`), checked on its own.
+fn entry_of(v: Value) throws (ApiError) -> Entry {
     if let f: Dict<str, Value> = record(v, "Stone") {
-        let (name, vers) = try check_stone(f);
-        return Entry { name: name, vers: vers, native: false, file: stones::shard(name), line: try flat(v) };
+        let (name, version) = try check_stone(f);
+        return Entry { name: name, version: version, native: false, file: stones::shard(name), line: try flat(v) };
     }
     if let f: Dict<str, Value> = record(v, "Native") {
-        let (name, vers) = try check_native(f);
-        return Entry { name: name, vers: vers, native: true, file: "native/" + stones::shard(name), line: try flat(v) };
+        let (name, version) = try check_native(f);
+        return Entry { name: name, version: version, native: true, file: "native/" + stones::shard(name), line: try flat(v) };
     }
-    throw bad("the body is a `Stone { .. }` or `Native { .. }` index entry");
+    throw bad("`entry` is a `Stone { .. }` or `Native { .. }` index entry");
+}
+
+const META_STRS: [str; 4] = ["description", "license", "default_run", "links"];
+const META_URLS: [str; 3] = ["homepage", "documentation", "repository"];
+const META_PATHS: [str; 2] = ["license_file", "readme"];
+const META_LISTS: [str; 5] = ["authors", "keywords", "categories", "include", "exclude"];
+
+/// A path inside the stone's tree: relative, no `..`.
+fn is_rel_path(p: str) -> bool {
+    if p.is_empty() || p.len() > 256 || p.starts_with("/") || p.contains("\\") { return false; }
+    for s in p.split("/") {
+        if s.is_empty() || s == "." || s == ".." { return false; }
+    }
+    true
+}
+
+/// String `k` of `f`, at most `max` bytes; `""` when absent.
+fn meta_str(f: Dict<str, Value>, k: str, max: usize) throws (ApiError) -> str {
+    let s = (try opt_str(f, k, "meta")) ?? "";
+    if s.len() > max { throw bad(f"meta: `{k}` is longer than {max} bytes"); }
+    s
+}
+
+fn meta_list(f: Dict<str, Value>, k: str, most: usize, max: usize) throws (ApiError) -> List<str> {
+    let out: List<str> = List::new();
+    let Value::List(xs) = f.get(k) ?? Value::List(List::new()) else { throw bad(f"meta: `{k}` is a list of strings"); };
+    if xs.len() > most { throw bad(f"meta: `{k}` has more than {most} entries"); }
+    for x in xs {
+        let Value::Str(t) = x else { throw bad(f"meta: `{k}` is a list of strings"); };
+        if t.trim().is_empty() || t.len() > max { throw bad(f"meta: `{k}` entries are 1 to {max} bytes"); }
+        out.push(t);
+    }
+    out
+}
+
+/// The largest README a publish carries.
+pub const README_MAX: usize = 524288;
+
+/// At most this many unknown `meta` keys, and this many bytes of them.
+const EXTRA_KEYS: usize = 32;
+const EXTRA_BYTES: usize = 16384;
+
+/// The descriptive metadata of a publish (the manifest's fields, what the
+/// client measured, the README text), checked. `links` comes from the
+/// index entry. Keys this server does not know are kept as sent in
+/// `Meta.extra` and named in `warnings`, so a newer client's fields reach
+/// the API before the server learns them.
+pub fn check_meta(v: Value, links: str, warnings: List<str>) throws (ApiError) -> (meta::Meta, str) {
+    let f = record(v, "") ?? (record(v, "Meta") ?? { throw bad("`meta` is `{ description: .., license: .., .. }`"); });
+    let known: List<str> = ["publish", "metadata", "has_lib", "bin_names", "size", "readme_content"];
+    for k in META_STRS { known.push(k); }
+    for k in META_URLS { known.push(k); }
+    for k in META_PATHS { known.push(k); }
+    for k in META_LISTS { known.push(k); }
+    let extra: Dict<str, Value> = Dict::new();
+    for k in f.keys() {
+        if !known.contains(k) {
+            extra.insert(k, f[k]);
+            warnings.push(f"meta: `{k}` is not known to this registry; kept as sent");
+        }
+    }
+    let m = meta::empty();
+    if extra.len() > 0 {
+        if extra.len() > EXTRA_KEYS { throw bad(f"meta: more than {EXTRA_KEYS} unknown keys"); }
+        let ev = Value::Struct { name: none, fields: extra };
+        if (try flat(ev)).len() > EXTRA_BYTES { throw bad(f"meta: unknown keys take more than {EXTRA_BYTES} bytes"); }
+        m.extra = ev;
+    }
+    m.description = try meta_str(f, "description", 1000);
+    m.license = try meta_str(f, "license", 256);
+    m.default_run = try meta_str(f, "default_run", 64);
+    m.links = try meta_str(f, "links", 64);
+    if !m.links.is_empty() && m.links != links { throw bad(f"meta: `links` is `{m.links}` but the entry's is `{links}`"); }
+    m.links = links;
+    m.homepage = try meta_str(f, "homepage", 512);
+    m.documentation = try meta_str(f, "documentation", 512);
+    m.repository = try meta_str(f, "repository", 512);
+    for u in [m.homepage, m.documentation, m.repository] {
+        if !u.is_empty() && !((u.starts_with("https://") || u.starts_with("http://")) && !u.contains(" ") && !u.contains("\"")) {
+            throw bad(f"meta: `{u}` is not an http(s) address");
+        }
+    }
+    m.license_file = try meta_str(f, "license_file", 256);
+    m.readme = try meta_str(f, "readme", 256);
+    for p in [m.license_file, m.readme] {
+        if !p.is_empty() && !is_rel_path(p) { throw bad(f"meta: `{p}` is not a path inside the stone (relative, no `..`)"); }
+    }
+    m.authors = try meta_list(f, "authors", 64, 256);
+    m.keywords = try meta_list(f, "keywords", 5, 32);
+    m.categories = try meta_list(f, "categories", 5, 64);
+    m.include = try meta_list(f, "include", 256, 256);
+    m.exclude = try meta_list(f, "exclude", 256, 256);
+    let p = f.get("publish") ?? Value::None;
+    match p {
+        Value::None => {},
+        Value::Bool(_) => {},
+        Value::List(_) => { _ = try meta_list(f, "publish", 16, 512); },
+        _ => throw bad("meta: `publish` is true, false or a list of registries"),
+    }
+    m.publish = p;
+    let md = f.get("metadata") ?? Value::None;
+    match md {
+        Value::None => {},
+        Value::Dict(_) => {},
+        Value::Struct { name: n, fields: _ } => {
+            if n is str { throw bad("meta: `metadata` is a table (`{ .. }`)"); }
+        },
+        _ => throw bad("meta: `metadata` is a table (`{ .. }`)"),
+    }
+    m.metadata = md;
+    if let hl: Value = f.get("has_lib") {
+        let Value::Bool(b) = hl else { throw bad("meta: `has_lib` is true or false"); };
+        m.has_lib = b;
+    }
+    m.bin_names = try meta_list(f, "bin_names", 256, 64);
+    for b in m.bin_names {
+        if !stones::is_name(b) { throw bad(f"meta: `{b}` is not a binary name"); }
+    }
+    if let sv: Value = f.get("size") {
+        let Value::Int(n) = sv else { throw bad("meta: `size` is a byte count"); };
+        let z = try i64::try_from(n) catch _ { throw bad("meta: `size` is a byte count"); };
+        if z < 0i64 { throw bad("meta: `size` is a byte count"); }
+        m.size = z;
+    }
+    let readme = try meta_str(f, "readme_content", README_MAX);
+    (m, readme)
+}
+
+/// A publish request: the index entry, the metadata kept beside it, its
+/// README text (`""`: none sent) and what the reply warns about.
+pub struct Publish {
+    pub entry: Entry;
+    pub meta: meta::Meta;
+    pub readme: str;
+    pub warnings: List<str>;
+}
+
+/// A publish body, `Publish { entry: Stone { .. } | Native { .. }, meta: { .. } }`
+/// (`meta` optional), checked on its own.
+pub fn parse_publish(body: str) throws (ApiError) -> Publish {
+    let v = try rokon::parse(body) catch e { throw bad(f"not ROKON: {e}"); };
+    let f = record(v, "Publish") ?? { throw bad("the body is `Publish { entry: Stone { .. }, meta: { .. } }`"); };
+    try only(f, ["entry", "meta"], "Publish");
+    let e = try entry_of(f.get("entry") ?? Value::None);
+    let links = "";
+    if let ef: Dict<str, Value> = record(f.get("entry") ?? Value::None, "Stone") {
+        links = (try opt_str(ef, "links", "Stone")) ?? "";
+    }
+    let warnings: List<str> = List::new();
+    let (m, readme) = match f.get("meta") {
+        mv: Value => try check_meta(mv, links, warnings),
+        none => (meta::empty(), ""),
+    };
+    m.links = links;
+    Publish { entry: e, meta: m, readme: readme, warnings: warnings }
 }
 
 /// `git args..` in `dir`; its stdout. A failure is logged (git's stderr
@@ -451,16 +656,50 @@ fn read_rel(dir: str, rel: str) throws (ApiError) -> str {
     try fs::read_to_str(p) catch e { throw err(500, f"{rel}: {e}"); }
 }
 
-/// The name and version of each line of an index file.
-fn versions(text: str) -> List<(str, str)> {
-    let out: List<(str, str)> = List::new();
+/// The name, version and yanked flag of each line of an index file.
+fn lines_of(text: str) -> List<(str, str, bool)> {
+    let out: List<(str, str, bool)> = List::new();
     for line in text.split("\n") {
         if line.trim().is_empty() { continue; }
         let v = try rokon::parse(line) catch _ { continue; };
         if let Value::Struct { name: _, fields } = v {
             let nm = if let Value::Str(s) = fields.get("name") ?? Value::None { s } else { "" };
-            let vs = if let Value::Str(s) = fields.get("vers") ?? Value::None { s } else { "" };
-            out.push((nm, vs));
+            let vs = if let Value::Str(s) = fields.get("version") ?? Value::None { s } else { "" };
+            out.push((nm, vs, fields.get("yanked") == Value::Bool(true)));
+        }
+    }
+    out
+}
+
+/// The name and version of each line of an index file.
+fn versions(text: str) -> List<(str, str)> {
+    let out: List<(str, str)> = List::new();
+    for (n, v, _) in lines_of(text) { out.push((n, v)); }
+    out
+}
+
+/// The versions of a package in the checkout and whether each is yanked,
+/// in index order; empty when it has none.
+pub fn releases(dir: str, native: bool, name: str) throws (ApiError) -> List<(str, bool)> {
+    let rel = (if native { "native/" } else { "" }) + stones::shard(name);
+    let out: List<(str, bool)> = List::new();
+    for (n, v, y) in lines_of(try read_rel(dir, rel)) {
+        if key(n) == key(name) { out.push((v, y)); }
+    }
+    out
+}
+
+/// Each index line of a package in the checkout, parsed, in index order.
+pub fn lines_for(dir: str, native: bool, name: str) throws (ApiError) -> List<Dict<str, Value>> {
+    let rel = (if native { "native/" } else { "" }) + stones::shard(name);
+    let out: List<Dict<str, Value>> = List::new();
+    for line in (try read_rel(dir, rel)).split("\n") {
+        if line.trim().is_empty() { continue; }
+        let v = try rokon::parse(line) catch _ { continue; };
+        if let Value::Struct { name: _, fields } = v {
+            if let Value::Str(n) = fields.get("name") ?? Value::None {
+                if key(n) == key(name) { out.push(fields); }
+            }
         }
     }
     out
@@ -492,22 +731,22 @@ pub fn exists(dir: str, native: bool, name: str) throws (ApiError) -> bool {
 
 /// Append `e` to the index (checked against it), commit as `who`, push.
 /// A stone's source commit, fetched into `cache`, is a library package
-/// (has `src/lib.rok`) whose tree hash is the line's `cksum`.
+/// (has `src/lib.rok`) whose tree hash is the line's `tree`.
 pub fn check_source(cache: str, e: Entry) throws (ApiError) {
     if e.native { return; }
     let (_, v) = try stones::parse_line(e.line) catch x { throw bad(x.msg); };
     let db = stones::fetch_commit(cache, v.url, v.rev) ?? { throw bad(f"cannot fetch {v.url} at {v.rev}"); };
     if !stones::has_file(db, v.rev, "src/lib.rok") { throw bad("not a library package (no src/lib.rok)"); }
     let tree = stones::tree_of(db, v.rev) ?? "";
-    if tree != v.cksum { throw bad(f"cksum {v.cksum} is not the tree hash of commit {v.rev} ({tree})"); }
+    if tree != v.tree { throw bad(f"`tree` {v.tree} is not the tree hash of commit {v.rev} ({tree})"); }
 }
 
 pub fn publish(dir: str, e: Entry, who: str) throws (ApiError) {
     try taken(dir, e.native, e.name);
     let text = try read_rel(dir, e.file);
     for (n, v) in versions(text) {
-        if key(n) == key(e.name) && stones::cmp_vers(v, e.vers) == Ordering::Equal {
-            throw err(409, f"{e.name} {e.vers} is already in the index");
+        if key(n) == key(e.name) && stones::cmp_vers(v, e.version) == Ordering::Equal {
+            throw err(409, f"{e.name} {e.version} is already in the index");
         }
     }
     let out = text;
@@ -517,12 +756,12 @@ pub fn publish(dir: str, e: Entry, who: str) throws (ApiError) {
     try fs::create_dir_all(pkg::layout::dir_of(full)) catch x { throw err(500, f"{x}"); };
     try fs::write(full, out) catch x { throw err(500, f"{x}"); };
     let what = if e.native { "native " } else { "" };
-    try commit_push(dir, e.file, f"Publish {what}{e.name} {e.vers}", who);
+    try commit_push(dir, e.file, f"Publish {what}{e.name} {e.version}", who);
 }
 
-/// Set `yanked` of `name` `vers`; false when it already was.
-pub fn yank(dir: str, name: str, vers: str, yanked: bool, native: bool, who: str) throws (ApiError) -> bool {
-    if !stones::is_name(name) || !is_version(vers) { throw bad("bad name or version"); }
+/// Set `yanked` of `name` `version`; false when it already was.
+pub fn yank(dir: str, name: str, version: str, yanked: bool, native: bool, who: str) throws (ApiError) -> bool {
+    if !stones::is_name(name) || !is_version(version) { throw bad("bad name or version"); }
     let rel = (if native { "native/" } else { "" }) + stones::shard(name);
     let text = try read_rel(dir, rel);
     let out = StrBuf::new();
@@ -537,8 +776,8 @@ pub fn yank(dir: str, name: str, vers: str, yanked: bool, native: bool, who: str
         let hit = false;
         if let Value::Struct { name: n, fields } = v {
             let nm = if let Value::Str(s) = fields.get("name") ?? Value::None { s } else { "" };
-            let vs = if let Value::Str(s) = fields.get("vers") ?? Value::None { s } else { "" };
-            if key(nm) == key(name) && stones::cmp_vers(vs, vers) == Ordering::Equal {
+            let vs = if let Value::Str(s) = fields.get("version") ?? Value::None { s } else { "" };
+            if key(nm) == key(name) && stones::cmp_vers(vs, version) == Ordering::Equal {
                 hit = true;
                 found = true;
                 if fields.get("yanked") != Value::Bool(yanked) {
@@ -551,11 +790,11 @@ pub fn yank(dir: str, name: str, vers: str, yanked: bool, native: bool, who: str
         if !hit { out.push_str(line + "\n"); }
     }
     let what = if native { "native " } else { "" };
-    if !found { throw err(404, f"{what}{name} {vers} is not in the index"); }
+    if !found { throw err(404, f"{what}{name} {version} is not in the index"); }
     if !changed { return false; }
     try fs::write(dir + "/" + rel, out.to_str()) catch x { throw err(500, f"{x}"); };
     let verb = if yanked { "Yank" } else { "Unyank" };
-    try commit_push(dir, rel, f"{verb} {what}{name} {vers}", who);
+    try commit_push(dir, rel, f"{verb} {what}{name} {version}", who);
     true
 }
 
@@ -564,9 +803,19 @@ fn expect(ok: bool, what: str) {
     if !ok { panic(what); }
 }
 
+/// The entry of a publish that sends `line` and no metadata.
 #[cfg(test)]
-fn status_of(body: str) -> i32 {
-    try parse_entry(body) catch e { return e.status; };
+fn parse_entry(line: str) throws (ApiError) -> Entry { (try parse_publish(f"Publish {{ entry: {line} }}")).entry }
+
+#[cfg(test)]
+fn status_of(line: str) -> i32 {
+    try parse_entry(line) catch e { return e.status; };
+    200
+}
+
+#[cfg(test)]
+fn meta_status(line: str, m: str) -> i32 {
+    try parse_publish(f"Publish {{ entry: {line}, meta: {m} }}") catch e { return e.status; };
     200
 }
 
@@ -585,7 +834,7 @@ fn versions_and_reqs() {
 #[test]
 fn entries() {
     let rev = "4f0c2a9e1b7d3c58a6e09f21d4b8c7a3e5f60123";
-    let good = f"Stone {{ name: \"geom\", vers: \"0.3.1\", deps: [{{ name: \"num\", req: \"^1.2\", kind: \"normal\" }}, {{ name: \"z\", req: \"^1\", kind: \"native\" }}], source: Dep::git(\"https://github.com/o/geom\", rev: \"{rev}\"), cksum: \"{rev}\", yanked: false, license: \"MIT\" }}";
+    let good = f"Stone {{ name: \"geom\", version: \"0.3.1\", deps: [{{ name: \"num\", req: \"^1.2\", kind: \"normal\" }}, {{ name: \"z\", req: \"^1\", kind: \"native\" }}], source: Dep::git(\"https://github.com/o/geom\", rev: \"{rev}\"), tree: \"{rev}\", yanked: false, toolchain: \"0.2\", links: \"z\" }}";
     let e = try parse_entry(good) catch x { panic(x.msg); };
     expect(e.name == "geom" && e.file == "ge/om/geom" && !e.native, "stone");
     // The line is the client's canonical one-line form.
@@ -594,15 +843,48 @@ fn entries() {
     expect(status_of(good.replace("https://github.com/o/geom", "http://github.com/o/geom")) == 400, "https only");
     expect(status_of(good.replace("rev:", "tag:")) == 400, "rev only");
     expect(status_of(good.replace("yanked: false", "yanked: true")) == 400, "not yanked");
-    expect(status_of(good.replace("license", "licence")) == 400, "unknown field");
+    expect(status_of(good.replace("toolchain", "toolchian")) == 400, "unknown field");
+    expect(status_of(good.replace("version:", "vers:")) == 400 && status_of(good.replace("tree:", "cksum:")) == 400, "0.1 names");
+    expect(status_of(good.replace("yanked: false", "yanked: false, v: 2")) == 400, "no format version");
+    for t in ["0.2", "0.2.1", "^0.2.1", ">=0.2, <0.4", "0.2.0-rc.1"] { expect(status_of(good.replace("\"0.2\"", f"\"{t}\"")) == 200, t); }
+    for t in ["", "x", "0.2.x", "1.2.3.4", "latest"] { expect(status_of(good.replace("\"0.2\"", f"\"{t}\"")) == 400, t); }
+    expect(status_of(good.replace("links: \"z\"", "links: \"a b\"")) == 400, "links");
+    expect(status_of(good.replace("license", "x")) == 200, "no metadata");
+    let m = "{ description: \"Geometry\", license: \"MIT\", license_file: \"LICENSE\", authors: [\"Ann <a@x.org>\"], homepage: \"https://x.org\", documentation: \"https://x.org/doc\", repository: \"https://github.com/o/geom\", readme: \"README.md\", keywords: [\"math\"], categories: [\"science\"], include: [\"src/**\"], exclude: [\"bench\"], publish: true, metadata: { docs: { all_features: true } }, links: \"z\", default_run: \"geom\" }";
+    let p = try parse_publish(f"Publish {{ entry: {good}, meta: {m} }}") catch x { panic(x.msg); };
+    expect(p.meta.description == "Geometry" && p.meta.keywords[0] == "math" && p.meta.links == "z" && p.meta.publish == Value::Bool(true), "meta");
+    expect(try! rokon::to_str_flat(p.meta.metadata) == "{ docs: { all_features: true } }", "metadata table");
+    expect(meta_status(good, "Meta { license: \"MIT\" }") == 200, "named meta");
+    let unk = try parse_publish(f"Publish {{ entry: {good}, meta: {{ licence: \"MIT\", rust_version: {{ a: [1] }} }} }}") catch x { panic(x.msg); };
+    expect(unk.warnings.len() == 2 && unk.warnings[0].contains("`licence`"), "unknown meta keys warn");
+    expect(try! rokon::to_str_flat(meta::to_value(unk.meta)) == "{ links: \"z\", licence: \"MIT\", rust_version: { a: [1] } }", "unknown meta keys kept");
+    expect(meta_status(good, "{ x: \"" + "a".repeat(20000) + "\" }") == 400, "unknown keys capped");
+    let more = try parse_publish(f"Publish {{ entry: {good}, meta: {{ has_lib: true, bin_names: [\"geom-cli\"], size: 4096, readme_content: \"# geom\\n\" }} }}") catch x { panic(x.msg); };
+    expect((more.meta.has_lib ?? false) && more.meta.bin_names[0] == "geom-cli" && (more.meta.size ?? 0i64) == 4096i64 && more.readme == "# geom\n" && more.warnings.is_empty(), "targets, size, readme");
+    expect(meta_status(good, "{ size: -1 }") == 400 && meta_status(good, "{ has_lib: 1 }") == 400 && meta_status(good, "{ bin_names: [\"a b\"] }") == 400, "target shapes");
+    expect(meta_status(good, "{ readme_content: \"" + "a".repeat(README_MAX + 1) + "\" }") == 400, "readme cap");
+    expect(meta_status(good, "{ homepage: \"javascript:x\" }") == 400, "homepage scheme");
+    expect(meta_status(good, "{ readme: \"../x\" }") == 400, "readme path");
+    expect(meta_status(good, "{ keywords: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"] }") == 400, "keywords");
+    expect(meta_status(good, "{ links: \"y\" }") == 400, "links differ");
+    expect(meta_status(good, "{ metadata: 3 }") == 400 && meta_status(good, "{ publish: \"yes\" }") == 400, "shapes");
+    expect(status_of("Stone { name: \"geom\" }") == 400, "missing fields");
     expect(status_of(good.replace("^1.2", "^1.x.2")) == 400, "req");
-    expect(status_of(good.replace("0.3.1", "0.3")) == 400, "vers");
-    expect(status_of("Stone { name: \"geom\" }") == 400 && status_of("Credentials { token: \"x\" }") == 400 && status_of("{") == 400, "shape");
+    let ren = good.replace("kind: \"normal\" }", "kind: \"normal\", package: \"num-core\", target: \"cfg(all(unix, not(target_os = \\\"macos\\\")))\" }");
+    let re = try parse_entry(ren) catch x { panic(x.msg); };
+    expect(re.line == ren, f"rename line: {re.line}");
+    expect(status_of(good.replace("kind: \"normal\" }", "kind: \"normal\", target: \"x86_64-unknown-linux-gnu\" }")) == 200, "triple target");
+    for t in ["", "cfg(unix", "cfg()", "cfg(a))(", "linux", "x86 64-a"] { expect(status_of(good.replace("kind: \"normal\" }", f"kind: \"normal\", target: \"{t}\" }}")) == 400, t); }
+    expect(status_of(good.replace("kind: \"normal\" }", "kind: \"normal\", package: \"Num\" }")) == 400, "package name");
+    expect(status_of(good.replace("0.3.1", "0.3")) == 400, "version");
+    expect(status_of("Credentials { token: \"x\" }") == 400, "shape");
+    let bare = try { _ = parse_publish(good); 200 } catch e { e.status };
+    expect(bare == 400, "a bare entry is no publish");
     let h = "ab".repeat(32);
-    let nat = f"Native {{ name: \"zlib\", vers: \"1.3.1\", deps: {{ \"yy\": Dep::native(\"^1.0\") }}, targets: {{ \"aarch64-apple-darwin\": Artifact {{ url: \"https://x/z.tar.gz\", sha256: \"{h}\", links: {{ \"z\": \"static\" }}, runtime: [\"bin/z.dll\"] }} }}, yanked: false }}";
+    let nat = f"Native {{ name: \"zlib\", version: \"1.3.1\", deps: {{ \"yy\": Dep::native(\"^1.0\") }}, targets: {{ \"aarch64-apple-darwin\": Artifact {{ url: \"https://x/z.tar.gz\", sha256: \"{h}\", links: {{ \"z\": \"static\" }}, runtime: [\"bin/z.dll\"] }} }}, yanked: false }}";
     let n = try parse_entry(nat) catch x { panic(x.msg); };
     expect(n.native && n.file == "native/zl/ib/zlib" && n.line == nat, f"native: {n.line}");
-    let ft = f"Stone {{ name: \"geom\", vers: \"0.3.1\", deps: [{{ name: \"num\", req: \"^1.2\", kind: \"normal\", optional: true, features: [\"fast\"], default_features: false }}], features: {{ \"default\": [\"simd\"], \"simd\": [\"dep:num\", \"num?/x\"] }}, source: Dep::git(\"https://github.com/o/geom\", rev: \"{rev}\"), cksum: \"{rev}\", yanked: false }}";
+    let ft = f"Stone {{ name: \"geom\", version: \"0.3.1\", deps: [{{ name: \"num\", req: \"^1.2\", kind: \"normal\", optional: true, features: [\"fast\"], default_features: false }}], features: {{ \"default\": [\"simd\"], \"simd\": [\"dep:num\", \"num?/x\"] }}, source: Dep::git(\"https://github.com/o/geom\", rev: \"{rev}\"), tree: \"{rev}\", yanked: false }}";
     let fe = try parse_entry(ft) catch x { panic(x.msg); };
     expect(fe.line == ft, f"features line: {fe.line}");
     expect(status_of(ft.replace("dep:num", "dep:nope")) == 400, "unknown dep");
@@ -628,16 +910,16 @@ fn sh(args: List<str>) -> str {
 fn repo_with(dir: str, file: str) -> str {
     try! fs::create_dir_all(dir + "/src");
     try! fs::write(f"{dir}/{file}", "pub fn f() -> i32 { 1 }\n");
-    sh(["git", "-C", dir, "init", "-q"]);
-    sh(["git", "-C", dir, "add", "-A"]);
-    sh(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
+    _ = sh(["git", "-C", dir, "init", "-q"]);
+    _ = sh(["git", "-C", dir, "add", "-A"]);
+    _ = sh(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
     sh(["git", "-C", dir, "rev-parse", "HEAD"])
 }
 
 #[test]
 fn sources() {
     let t = rok::std::env::temp_dir().as_str() + f"/rokstones-src-{rok::std::process::id()}";
-    let entry = |dir: str, rev: str, cksum: str| Entry { name: "geom", vers: "0.1.0", native: false, file: "ge/om/geom", line: f"Stone {{ name: \"geom\", vers: \"0.1.0\", source: Dep::git(\"{dir}\", rev: \"{rev}\"), cksum: \"{cksum}\" }}" };
+    let entry = |dir: str, rev: str, tree: str| Entry { name: "geom", version: "0.1.0", native: false, file: "ge/om/geom", line: f"Stone {{ name: \"geom\", version: \"0.1.0\", source: Dep::git(\"{dir}\", rev: \"{rev}\"), tree: \"{tree}\" }}" };
     let lib = repo_with(t + "/lib", "src/lib.rok");
     let tree = sh(["git", "-C", t + "/lib", "rev-parse", "HEAD^{tree}"]);
     try check_source(t + "/cache", entry(t + "/lib", lib, tree)) catch e { panic(e.msg); };
@@ -645,7 +927,7 @@ fn sources() {
         check_source(t + "/cache", entry(t + "/lib", lib, lib));
         ""
     } catch e { e.msg };
-    expect(wrong == f"cksum {lib} is not the tree hash of commit {lib} ({tree})", wrong);
+    expect(wrong == f"`tree` {lib} is not the tree hash of commit {lib} ({tree})", wrong);
     let app = repo_with(t + "/app", "src/main.rok");
     let msg = try {
         check_source(t + "/cache", entry(t + "/app", app, app));
