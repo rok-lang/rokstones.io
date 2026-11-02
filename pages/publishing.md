@@ -7,8 +7,8 @@ A **stone** is a Rok package: one git repository with `rok.rokon` at its root an
 Add a dependency with `rok add` in your project directory.
 
 ```sh
-rok add json            # range compatible with the latest version (^0.1.0)
-rok add http@^0.1       # explicit range
+rok add json            # range compatible with the latest version (^0.2.0)
+rok add http@^0.2       # explicit range
 ```
 
 `rok add` writes one line to `deps` in `rok.rokon`. You can also write it by hand.
@@ -18,7 +18,7 @@ Package {
     name: "app",
     version: "0.1.0",
     deps: {
-        "json": Dep::version("^0.1.0"),
+        "json": Dep::version("^0.2.0"),
     },
 }
 ```
@@ -31,17 +31,17 @@ Version requirements: `^1.2` (the default; a bare version means the same), `~1.2
 
 Publishing adds one line to the index repository. Sources are not uploaded: the line names a commit of the stone's own repository.
 
-The stone repository must have `rok.rokon` (`name`, `version`) at its root and its sources in `src/` (a library: `src/lib.rok`), a clean work tree, and its commit pushed to `origin`. Dependencies must be stones only (no `Dep::path` / `Dep::git`). Preview the index line with `rok publish` (dry run).
+The stone repository must have `rok.rokon` (`name`, `version`) at its root and its sources in `src/` (a library: `src/lib.rok`), a clean work tree, and its commit pushed to `origin`. Dependencies must be stones only (no `Dep::path` / `Dep::git`). Check what would be published with `rok publish --dry-run`.
 
-Publishing straight through rokstones.io, with a publish token, is not open yet. Until it is, a stone is added by pull request: fork the index, add the line, and send it as a pull request to the [index repository](https://github.com/rok-lang/rokstones.io-index):
+With a rokstones.io account token, `rok login` keeps it and `rok publish` sends the line to the registry, which adds it to the index. Tokens are open to the registry's maintainers only for now. Without one, a stone is added by pull request: fork the index, let `rok publish --index-dir` commit the line in your checkout, push, and send it as a pull request to the [index repository](https://github.com/rok-lang/rokstones.io-index):
 
 ```sh
 git clone https://github.com/<you>/rokstones.io-index
-rok publish --index rokstones.io-index --commit
+rok publish --index-dir rokstones.io-index
 ```
 
 Once merged, the stone appears on this site.
 
-A version published by mistake is not deleted but yanked: `rok yank --vers 0.3.1 --index <checkout>` (undo with `--undo`). Projects that already pinned it in `rok.lock` keep working.
+A version published by mistake is not deleted but yanked: `rok yank <name>@0.3.1` (with `--index-dir <checkout>` for a pull request; undo with `--undo`). Projects that already pinned it in `rok.lock` keep working.
 
 The index line format is described in the [index README](https://github.com/rok-lang/rokstones.io-index#readme).
