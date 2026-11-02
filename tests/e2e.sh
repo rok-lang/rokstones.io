@@ -107,7 +107,6 @@ login() {
 
 start_server alice
 
-# ---- static files ----
 for _ in $(seq 100); do [ -f "$T/site/public/index.html" ] && break; sleep 0.2; done
 req GET /
 expect_code 200 "home page"
@@ -164,7 +163,6 @@ grep -q 'googleapis\|jsdelivr' "$T/site/public/index.html" && fail "third-party 
 grep -q 'href="/login"' "$T/site/public/index.html" && fail "login button while publishing is closed"
 ok "static files"
 
-# ---- logins ----
 login user
 expect_body "Publishing is not open yet" "non-admin page"
 bob_sess=$sess bob_csrf=$csrf
@@ -189,7 +187,6 @@ grep -q "$tok" "$T/b" && fail "token shown twice"
 expect_body "<td>ci</td>" "token listed"
 ok "admin token"
 
-# ---- API ----
 auth=(-H "Authorization: Bearer $tok")
 req GET /api/v1/me "${auth[@]}"
 expect_code 200 "api me"
