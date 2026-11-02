@@ -14,7 +14,6 @@ use rok::std::rokon;
 use rok::std::rokon::Value;
 use rok::std::process::{Command, Stdio, ChildStdin, ChildStdout};
 use rok::std::thread;
-use rok::core::marker::take;
 use rok::std::time::SystemTime;
 use markdown::esc;
 use pkg::Site;
@@ -327,12 +326,12 @@ fn curl(config: str) throws (ApiError) -> str {
         throw index::err(502, f"cannot run curl: {e}");
     };
     let full = config + "silent\nshow-error\nfail\nmax-time = 20\n";
-    if let w: ChildStdin = take(ref c.stdin) {
+    if let w: ChildStdin = c.take_stdin() {
         try w.write_all(full) catch _ {};
         try w.close() catch _ {};
     }
     let out = "";
-    if let rd: ChildStdout = take(ref c.stdout) {
+    if let rd: ChildStdout = c.take_stdout() {
         out = try str::from_utf8(try rd.read_to_end() catch _ { List::<u8>::new() }) catch _ { "" };
         try rd.close() catch _ {};
     }
