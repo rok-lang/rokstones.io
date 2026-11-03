@@ -172,7 +172,7 @@ fn footer(site: Site) -> str {
     chrome::footer(chrome::Footer {
         home: site.home,
         logo: "/rok.svg",
-        tagline: "A compiled language that tells you what to write.",
+        tagline: "Compiled and safe, without the fight.",
         cols: [
             ("Learn", f"<a href=\"{d}/learn\">Guide</a><a href=\"{d}/examples\">Examples</a><a href=\"{esc(site.playground)}\">Playground</a>"),
             ("Reference", f"<a href=\"{d}/spec\">Language spec</a><a href=\"{d}/std\">Std library</a><a href=\"{d}/learn/16-tools\">Tools</a>"),
