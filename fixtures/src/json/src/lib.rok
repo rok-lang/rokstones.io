@@ -35,7 +35,7 @@ pub struct JsonError {
     pub col: usize;
 }
 
-/// A rok value as JSON.
+/// A Rok value as JSON.
 pub trait ToJson {
     fn to_json(self) -> Value;
 }

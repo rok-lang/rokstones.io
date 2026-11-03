@@ -1,4 +1,4 @@
-// One-shot move of an index checkout to the 0.2 line format: `vers` ->
+// One-shot move of an index checkout to the current line format: `vers` ->
 // `version`, `cksum` -> `tree`, and the descriptive fields
 // (`description`, `license`, `repository`) out of the lines into the
 // server's data file. Lines already in the new format are left as they
@@ -24,7 +24,7 @@ pub struct Moved {
     pub fields: Dict<str, str>;
 }
 
-/// `line` in the 0.2 format, and what left it; the line unchanged when it
+/// `line` in the current format, and what left it; the line unchanged when it
 /// is not an entry.
 pub fn line(text: str, native: bool) throws -> (str, Moved | none) {
     let v = try rokon::parse(text);

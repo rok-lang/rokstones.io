@@ -9,7 +9,7 @@
 //   rok run -- --data <dir>      the server's data (db.rokon): metadata, publishers, owners
 //   rok run -- serve             serve the site and the API (see server.rok)
 //   rok run -- migrate-index <index> [<data>]
-//                                rewrite 0.1 index lines to the 0.2 names (migrate.rok)
+//                                rewrite old index lines (`vers`, `cksum`) to the current names
 
 mod layout;
 mod stones;

@@ -106,7 +106,7 @@ fn clip(s: str, n: usize) -> str {
 }
 
 // Stone glyph: the rokstones pebble, turned, stretched and tinted by a hash
-// of the name. Same hash as the design canvas and og/render.mjs.
+// of the name. Same hash as og/render.mjs.
 
 fn name_hash(name: str) -> i64 {
     let h = 7i64;
