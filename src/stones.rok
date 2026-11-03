@@ -1,6 +1,6 @@
 // The registry index: one file per stone, one `Stone { .. }` line per
-// version (see the index's README). Reading, semver order, reverse
-// dependencies, and each stone's README fetched from its source commit.
+// version. Reading, semver order, reverse dependencies, and each
+// stone's README fetched from its source commit.
 
 use rok::std::fs;
 use rok::std::rokon;

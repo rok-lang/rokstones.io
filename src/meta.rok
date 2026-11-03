@@ -66,8 +66,8 @@ pub struct Release {
     /// Why it was yanked (`Yank { message }`); `""` when not given or
     /// unyanked.
     pub yank_message: str = "";
-    /// Downloads counted by the server. Stones are fetched from their git
-    /// source, not from here, so nothing counts them yet.
+    /// Downloads counted by the server. Always 0: stones are fetched
+    /// from their git source, not from here.
     pub downloads: i64 = 0i64;
 }
 
