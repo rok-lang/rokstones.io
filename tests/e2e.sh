@@ -443,7 +443,7 @@ expect_code 200 "fill in metadata"
 expect_body 'seeded 0.2.0 was already in the index from this tree; its missing metadata is filled in' "fill in warning"
 [ "$(git -C "$T/remote.git" rev-parse HEAD)" = "$before" ] || fail "fill in committed"
 req GET /api/v1/stones/seeded
-expect_body 'meta: { description: "Seeded", license: "MIT" }, has_readme: true, downloads: 0, published_by: none' "filled in metadata"
+expect_body 'meta: { description: "Seeded", license: "MIT" }, has_readme: true, downloads: 0, published_by: Actor' "filled in metadata"
 echo '// changed' >> "$T/src/seeded/src/lib.rok"
 git -C "$T/src/seeded" -c user.name=t -c user.email=t@t commit -q -am change
 srev2=$(git -C "$T/src/seeded" rev-parse HEAD)
@@ -493,7 +493,7 @@ for _ in $(seq 50); do
 done
 expect_body '<a href="https://github.com/carol">carol</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777" title="refs/tags/v1, run 777">publish.yml</a>)' "trusted publisher on the versions page"
 req GET /stones/geom/0.0.9
-expect_body '<dt>Published</dt><dd><time datetime="[0-9-]*">[0-9-]*</time> by <a href="https://github.com/carol">carol</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777"' "trusted publisher on the version page"
+expect_body '<dt>Published</dt><dd><time datetime="[0-9T:Z-]*">[0-9-]* [0-9:]* UTC</time> by <a href="https://github.com/carol">carol</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777"' "trusted publisher on the version page"
 req GET /stones/geom
 expect_body '<dt>Category</dt><dd>mathematics</dd>' "categories on the page"
 expect_body '<p>Shapes, <strong>fast</strong>.</p>' "published README rendered"
