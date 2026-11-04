@@ -170,12 +170,30 @@ expect_code 200 "font"
 req GET /fonts/pretendard.css
 [ "$(header content-type)" = "text/css; charset=utf-8" ] || fail "pretendard.css type: $(header content-type)"
 grep -q 'googleapis\|jsdelivr' "$T/site/public/index.html" && fail "third-party fonts"
-grep -q 'href="/login"' "$T/site/public/index.html" && fail "login button while publishing is closed"
+grep -q '<a class="btn-2 btn-sm login" href="/login">Log in<span class="wide"> with GitHub</span></a>' "$T/site/public/index.html" || fail "no login button"
+req GET /
+expect_body 'href="/login">Log in' "login button logged out"
+[ "$(header vary)" = "Cookie" ] || fail "html vary: $(header vary)"
+req GET / -H "Cookie: rks_session=$(printf 'ab%.0s' $(seq 32))"
+expect_body 'href="/login">Log in' "login button with a dead session"
+[ "$(header cache-control)" = "public, max-age=60, must-revalidate" ] || fail "dead session cache: $(header cache-control)"
 ok "static files"
 
 login user
 expect_body "Publishing is not open yet" "non-admin page"
+expect_body 'come from your GitHub account' "profile note"
+expect_body 'Logged in with GitHub as <a href="https://github.com/Bob"><strong>Bob</strong></a>' "non-admin profile"
+grep -q 'action="/me/owners"' "$T/b" && fail "owner form offered to a non-admin"
 bob_sess=$sess bob_csrf=$csrf
+req GET / -H "Cookie: rks_session=$bob_sess"
+expect_code 200 "home logged in"
+grep -q 'href="/login"' "$T/b" && fail "login button while logged in"
+expect_body '<details class="user"><summary class="btn-2 btn-sm" aria-label="Account menu of Bob"><img class="av" src="https://avatars.githubusercontent.com/u/1002?s=40&v=4"' "header avatar"
+expect_body "action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"$bob_csrf\">" "header log out"
+[ "$(header cache-control)" = "no-store" ] || fail "logged-in page cache: $(header cache-control)"
+[ -z "$(header etag)" ] || fail "logged-in page etag"
+req GET /publishing -H "Cookie: rks_session=$bob_sess"
+expect_body 'href="/me">Account</a>' "menu on a static page"
 req POST /me/tokens -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&name=x"
 expect_code 403 "non-admin token"
 expect_body "not open yet" "non-admin token message"
@@ -185,10 +203,18 @@ grep -q 'action="/me/tokens"\|action="/me/trusted"' "$T/b" && fail "forms offere
 req POST /me/trusted -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&repository=acme/geom&workflow=publish.yml"
 expect_code 403 "non-admin trusted publisher"
 expect_body "not open yet" "non-admin trusted publisher message"
+req POST /me/owners -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&login=Bob"
+expect_code 403 "non-admin adds an owner"
+expect_body "not open yet" "non-admin owner message"
+req POST /me/owners/remove -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&login=alice"
+expect_code 403 "non-admin removes an owner"
 ok "non-admin cannot get a token"
 
 login admin
 expect_body "<strong>alice</strong>" "admin page"
+expect_body '<img class="av" src="https://avatars.githubusercontent.com/u/1001?s=160&v=4" width="80" height="80"' "profile avatar"
+expect_body '<p class="t-h3">Alice Liddell</p>' "profile name"
+grep -q 'name: "Alice Liddell"' "$T/data/db.rokon" && grep -q 'avatar_url: "https://avatars.githubusercontent.com/u/1001?v=4"' "$T/data/db.rokon" || fail "account name and avatar not stored"
 req POST /me/tokens -H "Cookie: rks_session=$sess" --data "name=ci"
 expect_code 403 "token without csrf"
 req POST /me/tokens -H "Cookie: rks_session=$sess" --data "csrf=$bob_csrf&name=ci"
@@ -337,6 +363,39 @@ req POST /api/v1/stones/geom "${auth[@]}"
 expect_code 405 "stone api method"
 ok "metadata api"
 
+# Owners: users who logged in here, organisations and teams.
+req POST /me/owners -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&login=acme"
+expect_code 303 "add an organization owner"
+req POST /me/owners -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&login=acme"
+expect_code 409 "same owner twice"
+req POST /me/owners -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&login=carol"
+expect_code 400 "a user who never logged in"
+expect_body "carol has not logged in to rokstones.io yet" "never logged in body"
+req POST /me/owners -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&login=nobody"
+expect_code 400 "unknown GitHub name"
+req POST /me/owners -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=nope&login=acme"
+expect_code 404 "owner of a stone not in the index"
+req POST /me/owners -H "Cookie: rks_session=$sess" --data "csrf=$bob_csrf&stone=geom&login=acme"
+expect_code 403 "owner form with another session's csrf"
+req POST /api/v1/owners "${auth[@]}" --data-binary 'Owner { stone: "geom", login: "bob" }'
+expect_code 200 "api add a user owner"
+expect_body 'Added { stone: "geom", login: "Bob", org: false }' "api add body"
+req POST /api/v1/owners "${auth[@]}" --data-binary 'Owner { stone: "geom", login: "acme/release" }'
+expect_code 200 "api add a team owner"
+req GET /api/v1/stones/geom
+expect_body 'owners: \[{ id: 1001, login: "alice" }, { id: 1002, login: "Bob" }\], orgs: \[{ id: 4242, login: "acme" }, { id: 4242, login: "acme/release" }\]' "owners in the api"
+req GET /me -H "Cookie: rks_session=$sess"
+expect_body '<td>geom</td><td><a class="who" href="https://github.com/orgs/acme/teams/release"><img class="av org"' "team owner listed"
+req POST /api/v1/owners/remove "${auth[@]}" --data-binary 'Owner { stone: "geom", login: "acme/release" }'
+expect_code 200 "api remove an owner"
+req POST /me/owners/remove -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&login=Bob"
+expect_code 303 "remove a user owner"
+req POST /me/owners/remove -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&login=Bob"
+expect_code 404 "removed twice"
+req GET /api/v1/stones/geom
+expect_body 'owners: \[{ id: 1001, login: "alice" }\], orgs: \[{ id: 4242, login: "acme" }\]' "owners after removal"
+ok "owners"
+
 # Trusted publishing: a workflow's OIDC token (signed by the fake
 # issuer) traded for a short-lived token scoped to the stones that
 # trust that workflow.
@@ -420,7 +479,7 @@ expect_code 200 "trusted yank"
 req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.0.9", undo: true }'
 expect_code 200 "trusted unyank"
 req GET /api/v1/stones/geom
-expect_body 'version: "0.0.9", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes" }, has_readme: false, downloads: 0, published_by: Actor { id: 0, login: "acme", at: [0-9]*, via: Via { repository: "acme/geom", workflow: "publish.yml", ref: "refs/tags/v1", run_id: "777", run_attempt: "1" } }' "trusted publisher recorded"
+expect_body 'version: "0.0.9", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes" }, has_readme: false, downloads: 0, published_by: Actor { id: 0, login: "acme", at: [0-9]*, via: Via { repository: "acme/geom", workflow: "publish.yml", ref: "refs/tags/v1", run_id: "777", run_attempt: "1", owner_id: 4242 } }' "trusted publisher recorded"
 expect_body 'yanked_by: Actor { id: 0, login: "acme", at: [0-9]*, via: Via { repository: "acme/geom"' "trusted yank recorded"
 
 # A version committed with `rok publish --index-dir` has no metadata:
@@ -484,16 +543,22 @@ ok "push failure"
 for _ in $(seq 100); do [ -f "$T/site/public/stones/geom.html" ] && break; sleep 0.2; done
 req GET /stones/geom
 expect_code 200 "stone page after publish"
-expect_body '<dt>Owner</dt><dd><a href="https://github.com/alice">alice</a></dd>' "owners on the page"
-expect_body 'by <a href="https://github.com/alice">alice</a>' "publisher on the page"
+alice_av='<img class="av" src="https://avatars.githubusercontent.com/u/1001?s=48&v=4" width="24" height="24" alt="" loading="lazy" decoding="async">'
+acme_av='<img class="av org" src="https://avatars.githubusercontent.com/u/4242?s=48&v=4" width="24" height="24" alt="" loading="lazy" decoding="async">'
+expect_body "<h2 class=\"t-label\" id=\"owners\">Owners</h2><ul class=\"people\"><li><a class=\"who\" href=\"https://github.com/alice\" title=\"alice\">$alice_av<span>Alice Liddell</span></a></li><li><a class=\"who\" href=\"https://github.com/acme\">$acme_av<span>acme</span></a></li></ul>" "owners on the page"
+expect_body 'by <a class="who" href="https://github.com/alice" title="alice"><img class="av" src="https://avatars.githubusercontent.com/u/1001?s=32&v=4"' "publisher on the page"
+expect_body 'id="published-by">Published by</h2>' "several publishers"
+req GET /stones/geom -H "Cookie: rks_session=$sess"
+expect_body 'aria-label="Account menu of alice"><img class="av" src="https://avatars.githubusercontent.com/u/1001?s=40&v=4"' "header avatar on a stone page"
 for _ in $(seq 50); do
     req GET /stones/geom/versions
     grep -q 'via GitHub Actions' "$T/b" && break
     sleep 0.2
 done
-expect_body '<a href="https://github.com/acme">acme</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777" title="refs/tags/v1, run 777">publish.yml</a>)' "trusted publisher on the versions page"
+expect_body '<td class="by"><span class="via" title="acme via GitHub Actions (acme/geom, publish.yml)"><a class="who" href="https://github.com/acme"><img class="av" src="https://avatars.githubusercontent.com/u/4242?s=32&v=4" width="16" height="16" alt="" loading="lazy" decoding="async"><span>acme</span></a></span></td>' "trusted publisher on the versions page"
+expect_body '<td>4.0 KiB</td><td class="mono">rok 0.2</td>' "size and toolchain on the versions page"
 req GET /stones/geom/0.0.9
-expect_body '<dt>Published</dt><dd><time datetime="[0-9T:Z-]*">[0-9-]* [0-9:]* UTC</time> by <a href="https://github.com/acme">acme</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777"' "trusted publisher on the version page"
+expect_body '<dt>Published</dt><dd><time datetime="[0-9T:Z-]*">[0-9-]* [0-9:]* UTC</time> by <a class="who" href="https://github.com/acme"><img class="av" src="https://avatars.githubusercontent.com/u/4242?s=32&v=4" width="16" height="16" alt="" loading="lazy" decoding="async"><span>acme</span></a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777"' "trusted publisher on the version page"
 req GET /stones/geom
 expect_body '<dt>Category</dt><dd>mathematics</dd>' "categories on the page"
 expect_body '<p>Shapes, <strong>fast</strong>.</p>' "published README rendered"

@@ -52,8 +52,9 @@ pub struct Site {
     /// The toolchain release the footer names (`rok 0.1.6`): when it is
     /// not set, the rokc on PATH's (the server has none; the deploy sets it).
     pub release: str = "";
-    /// Whether anyone may log in and publish. While it is not, the header
-    /// has no login button and stones come in by pull request to the index.
+    /// Ignored, kept so older site files still load: the header always
+    /// offers login, and the server's ROKSTONES_OPEN_PUBLISHING decides
+    /// who may publish.
     pub publishing: bool = false;
     /// README cache (git objects and extracted READMEs).
     pub cache: str = ".cache";
@@ -341,16 +342,18 @@ fn main() throws {
     let data = stones::no_data();
     if !data_dir.is_empty() {
         let db = try server::read_db(data_dir);
-        for r in db.releases { data.releases.insert(r.name + "@" + r.version, r); }
-        let logins: Dict<i64, str> = Dict::new();
-        for a in db.accounts { logins.insert(a.id, a.login); }
-        for o in db.owners {
-            if o.name.starts_with("native/") { continue; }
-            let ls: List<str> = List::new();
-            for id in o.accounts {
-                if let l: str = logins.get(id) { ls.push(l); }
-            }
-            data.owners.insert(o.name, ls);
+        for r in server::fill_owner_ids(db) { data.releases.insert(r.name + "@" + r.version, r); }
+        for a in db.accounts {
+            if !a.name.is_empty() { data.names.insert(a.id, a.name); }
+        }
+        let keys: Set<str> = Set::new();
+        for o in db.owners { keys.insert(o.name); }
+        for p in db.trusted { keys.insert(index::key(p.stone)); }
+        for r in db.releases { keys.insert(r.name); }
+        for k in keys {
+            if k.starts_with("native/") { continue; }
+            let ps = server::owners_for(db, k);
+            if !ps.is_empty() { data.owners.insert(k, ps); }
         }
     }
     let idx = stones::load(dir, readmes, data);

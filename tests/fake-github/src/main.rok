@@ -4,7 +4,8 @@
 //   fake_github <addr> <client secret>
 //
 // Code `admin` logs in as `alice` (id 1001), `user` as `Bob` (id 1002).
-// Repositories of `acme` exist, owned by id 4242. The issuer is
+// Repositories of `acme` exist, owned by id 4242; `/users/` knows the
+// organisation `acme` and the user `carol` (id 3003). The issuer is
 // http://<addr>/oidc; `POST /_mint` signs the JSON claims it is sent
 // into an OIDC token.
 
@@ -107,11 +108,20 @@ fn answer(s: TcpStream, secret: str, addr: str) throws {
         status = "401 Unauthorized";
         if text.contains("\r\nAuthorization: Bearer gho_alice\r\n") {
             status = "200 OK";
-            out = "{\"login\":\"alice\",\"id\":1001,\"plan\":{\"name\":\"free\"}}";
+            out = "{\"login\":\"alice\",\"id\":1001,\"name\":\"Alice Liddell\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/1001?v=4\",\"plan\":{\"name\":\"free\"}}";
         }
         if text.contains("\r\nAuthorization: Bearer gho_bob\r\n") {
             status = "200 OK";
-            out = "{\"login\":\"Bob\",\"id\":1002}";
+            out = "{\"login\":\"Bob\",\"id\":1002,\"name\":null}";
+        }
+    } else if let rest: str = line.0.strip_prefix("GET /users/") {
+        let who = (rest.split_once(" ") ?? (rest, "")).0.to_lowercase();
+        if who == "acme" {
+            status = "200 OK";
+            out = "{\"login\":\"acme\",\"id\":4242,\"type\":\"Organization\"}";
+        } else if who == "carol" {
+            status = "200 OK";
+            out = "{\"login\":\"carol\",\"id\":3003,\"type\":\"User\"}";
         }
     }
     try s.write_all(f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {out.len()}\r\nConnection: close\r\n\r\n{out}");

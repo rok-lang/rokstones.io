@@ -56,12 +56,46 @@ pub struct Via {
     /// Decimal; "": not given.
     pub run_id: str = "";
     pub run_attempt: str = "";
+    /// GitHub's id of the repository's owner (`repository_owner_id`); 0:
+    /// not recorded.
+    pub owner_id: i64 = 0i64;
 }
 
 /// Who a trusted publish is shown as: the repository's owner (the
 /// organisation or user), not the account that started the run.
 pub fn owner_of(v: Via) -> str {
     if let p: (str, str) = v.repository.split_once("/") { p.0 } else { v.repository }
+}
+
+/// A GitHub user or organisation as a page shows it: an owner or a
+/// publisher.
+pub struct Person {
+    /// A login, an organisation, or `org/team`.
+    pub login: str;
+    /// GitHub's display name; "": none.
+    pub name: str = "";
+    /// GitHub's numeric id (the org's, for a team); 0: not known.
+    pub id: i64 = 0i64;
+    /// An organisation or team on record.
+    pub org: bool = false;
+    /// Not on record: the owner of a trusted publisher's repository.
+    pub derived: bool = false;
+}
+
+/// GitHub's avatar of account `id` at `px` pixels; "" when the id is not
+/// known. Built from the id alone, so no address a user sent is loaded.
+pub fn avatar_url(id: i64, px: i32) -> str {
+    if id <= 0i64 { return ""; }
+    f"https://avatars.githubusercontent.com/u/{id}?s={px}&v=4"
+}
+
+/// Who `a` is shown as: the account, or for a trusted publish the
+/// repository's owner.
+pub fn person_of(a: Actor) -> Person {
+    match a.via {
+        v: Via => Person { login: owner_of(v), id: v.owner_id },
+        none => Person { login: a.login, id: a.id },
+    }
 }
 
 /// An account at a moment: who did something, and when (unix seconds).
@@ -166,6 +200,17 @@ pub fn over(m: Meta, under: Meta) -> Meta {
 #[cfg(test)]
 fn expect(ok: bool, what: str) {
     if !ok { panic(what); }
+}
+
+#[test]
+fn avatars() {
+    expect(avatar_url(341800840i64, 64) == "https://avatars.githubusercontent.com/u/341800840?s=64&v=4", avatar_url(341800840i64, 64));
+    expect(avatar_url(0i64, 64).is_empty() && avatar_url(-1i64, 64).is_empty(), "unknown id");
+    expect(person_of(Actor { id: 5i64, login: "ann", at: 1i64 }).id == 5i64, "person of an account");
+    let pv = person_of(Actor { id: 5i64, login: "ann", at: 1i64, via: Via { repository: "rok-lang/json", workflow: "publish.yml", owner_id: 341800840i64 } });
+    expect(pv.login == "rok-lang" && pv.id == 341800840i64, "person of a trusted publish");
+    let old: Via = try rokon::from_str("Via { repository: \"a/b\", workflow: \"p.yml\" }") catch e { panic(f"{e}"); };
+    expect(old.owner_id == 0i64, "old via");
 }
 
 #[test]

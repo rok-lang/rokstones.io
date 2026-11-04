@@ -2,17 +2,28 @@
 // version was published with and by whom.
 Db {
     accounts: [
-        Account { id: 1001, login: "alice", created: 1767225600 },
+        Account { id: 1001, login: "alice", created: 1767225600, name: "Alice Kim" },
         Account { id: 1002, login: "bob", created: 1767225600 },
     ],
     sessions: [],
     tokens: [],
     owners: [
-        Owner { name: "geom", accounts: [1001, 1002] },
+        Owner { name: "geom", accounts: [1001, 1002], orgs: [OrgOwner { login: "rok-lang", id: 341800840 }] },
         Owner { name: "json", accounts: [1001] },
         Owner { name: "old", accounts: [1002] },
     ],
     releases: [
+        Release {
+            name: "json",
+            version: "0.4.0",
+            meta: Meta { description: "JSON parser and writer", license: "MIT OR Apache-2.0", size: 18432 },
+            published_by: Actor {
+                id: 3003,
+                login: "carol",
+                at: 1767225600,
+                via: Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.4.0", run_id: "1234", run_attempt: "1" },
+            },
+        },
         Release {
             name: "http",
             version: "0.1.0",
@@ -52,5 +63,8 @@ Db {
             published_by: Actor { id: 1002, login: "bob", at: 1767225600 },
             yanked_by: Actor { id: 1002, login: "bob", at: 1767312000 },
         },
+    ],
+    trusted: [
+        TrustedPublisher { stone: "json", repository: "rok-lang/json", owner_id: 341800840, workflow: "publish.yml", seeded: true },
     ],
 }

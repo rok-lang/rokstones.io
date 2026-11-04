@@ -153,6 +153,10 @@ pub struct Account {
     pub id: i64;
     pub login: str;
     pub created: i64;
+    /// GitHub's display name and avatar address at the last login; ""
+    /// when unset. Pages build the avatar from `id` (meta::avatar_url).
+    pub name: str = "";
+    pub avatar_url: str = "";
 }
 
 #[derive(Rokon)]
@@ -181,7 +185,23 @@ pub struct Token {
 pub struct Owner {
     pub name: str;
     pub accounts: List<i64>;
+    /// Organisations and teams shown as owners. They grant no account
+    /// anything: login asks GitHub for no membership, so their members
+    /// publish through trusted publishing.
+    pub orgs: List<OrgOwner> = List::new();
 }
+
+#[derive(Rokon)]
+pub struct OrgOwner {
+    /// `org` or `org/team`, as GitHub spells the org.
+    pub login: str;
+    /// The organisation's numeric id.
+    pub id: i64;
+    pub added_by: str = "";
+    pub added: i64 = 0i64;
+}
+
+const MAX_OWNERS: usize = 32;
 
 #[derive(Rokon)]
 pub struct Db {
@@ -280,6 +300,64 @@ fn owners_of(db: Db, k: str) -> List<i64> | none {
         if o.name == k { return o.accounts; }
     }
     none
+}
+
+/// The owners a page shows for `k` (`index::key`): its accounts and
+/// organisations on record, then the owner of each trusted publisher's
+/// repository and of each trusted publish, once each.
+pub fn owners_for(db: Db, k: str) -> List<meta::Person> {
+    let out: List<meta::Person> = List::new();
+    let seen: Set<str> = Set::new();
+    let put = |p: meta::Person| {
+        let l = p.login.to_lowercase();
+        if p.login.is_empty() || seen.contains(l) { return; }
+        seen.insert(l);
+        out.push(p);
+    };
+    for o in db.owners {
+        if o.name != k { continue; }
+        for id in o.accounts {
+            if let a: Account = account(db, id) { put(meta::Person { login: a.login, name: a.name, id: a.id }); }
+        }
+        for g in o.orgs { put(meta::Person { login: g.login, id: g.id, org: true }); }
+    }
+    if k.starts_with("native/") { return out; }
+    for p in db.trusted {
+        if index::key(p.stone) != k { continue; }
+        put(meta::Person { login: (p.repository.split_once("/") ?? (p.repository, "")).0, id: p.owner_id, derived: true });
+    }
+    for r in fill_owner_ids(db) {
+        if r.name != k { continue; }
+        if let a: Actor = r.published_by {
+            if a.via is meta::Via {
+                let p = meta::person_of(a);
+                p.derived = true;
+                put(p);
+            }
+        }
+    }
+    out
+}
+
+/// `db.releases`, each trusted publish that recorded no owner id given
+/// its repository's from the trusted publishers.
+pub fn fill_owner_ids(db: Db) -> List<Release> {
+    let ids: Dict<str, i64> = Dict::new();
+    for p in db.trusted {
+        if p.owner_id > 0i64 { ids.insert(p.repository.to_lowercase(), p.owner_id); }
+    }
+    let out: List<Release> = List::new();
+    for r in db.releases {
+        out.push(Release { name: r.name, version: r.version, meta: r.meta, published_by: with_owner_id(r.published_by, ids), yanked_by: with_owner_id(r.yanked_by, ids), unyanked_by: with_owner_id(r.unyanked_by, ids), yank_message: r.yank_message, downloads: r.downloads });
+    }
+    out
+}
+
+fn with_owner_id(x: Actor | none, ids: Dict<str, i64>) -> Actor | none {
+    let a = x ?? { return none; };
+    let v = a.via ?? { return a; };
+    if v.owner_id != 0i64 { return a; }
+    Actor { id: a.id, login: a.login, at: a.at, via: meta::Via { repository: v.repository, workflow: v.workflow, ref: v.ref, run_id: v.run_id, run_attempt: v.run_attempt, owner_id: ids.get(v.repository.to_lowercase()) ?? 0i64 } }
 }
 
 pub struct Resp {
@@ -412,8 +490,23 @@ fn is_login(s: str) -> bool {
     true
 }
 
-/// The GitHub account behind an OAuth `code`: (id, login).
-fn github_user(cfg: Cfg, code: str) throws (ApiError) -> (i64, str) {
+/// GitHub's display name as sent: one line of at most 100 characters,
+/// "" when it is null or not given.
+pub fn display_name(raw: str) -> str {
+    let t = raw.trim();
+    if t == "null" { return ""; }
+    let out = StrBuf::new();
+    let n = 0usize;
+    for c in t.chars() {
+        if n == 100 { break; }
+        out.push(if (c as u32) < 0x20u32 { ' ' } else { c });
+        n += 1;
+    }
+    out.to_str()
+}
+
+/// The GitHub account behind an OAuth `code`.
+fn github_user(cfg: Cfg, code: str) throws (ApiError) -> Account {
     let callback = cfg.url + "/auth/github/callback";
     let data = f"client_id={http::pct_encode(cfg.client_id)}&client_secret={http::pct_encode(cfg.client_secret)}&code={http::pct_encode(code)}&redirect_uri={http::pct_encode(callback)}";
     let ua = "header = " + cq("User-Agent: rokstones.io") + "\n";
@@ -424,7 +517,8 @@ fn github_user(cfg: Cfg, code: str) throws (ApiError) -> (i64, str) {
     let id = try (user.get("id") ?? "").parse::<i64>() catch _ { throw index::err(502, "GitHub sent no user id"); };
     let login = user.get("login") ?? "";
     if id <= 0i64 || !is_login(login) { throw index::err(502, "GitHub sent a malformed user"); }
-    (id, login)
+    let av = user.get("avatar_url") ?? "";
+    Account { id: id, login: login, created: 0i64, name: display_name(user.get("name") ?? ""), avatar_url: if av.starts_with("https://") && av.len() <= 512 { av } else { "" } }
 }
 
 fn login(cfg: Cfg) throws -> Resp {
@@ -444,9 +538,10 @@ fn callback(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     if code.is_empty() {
         return message(site, r.path, 400, "Login cancelled", "GitHub did not authorize the login.");
     }
-    let (id, login) = try github_user(cfg, code) catch e {
+    let gh = try github_user(cfg, code) catch e {
         return message(site, r.path, e.status, "Login failed", e.msg);
     };
+    let id = gh.id;
     let sid = try secret::random_hex(32);
     let csrf = try secret::random_hex(16);
     let now = now_secs();
@@ -456,11 +551,13 @@ fn callback(cfg: Cfg, site: Site, r: Request) throws -> Resp {
         let seen = false;
         for i in 0..db.accounts.len() {
             if db.accounts[i].id == id {
-                db.accounts[i].login = login;
+                db.accounts[i].login = gh.login;
+                db.accounts[i].name = gh.name;
+                db.accounts[i].avatar_url = gh.avatar_url;
                 seen = true;
             }
         }
-        if !seen { db.accounts.push(Account { id: id, login: login, created: now }); }
+        if !seen { db.accounts.push(Account { id: id, login: gh.login, created: now, name: gh.name, avatar_url: gh.avatar_url }); }
         db.sessions.push(Session { hash: secret::sha256_hex(sid), account: id, csrf: csrf, expires: now + SESSION_SECS });
         try save_db(cfg, db);
         out = redirect("/me", [cookie("rks_session", sid, SESSION_SECS), cookie("rks_state", "", 0i64)]);
@@ -472,12 +569,15 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
     let a = account(db, s.account) ?? Account { id: 0i64, login: "", created: 0i64 };
     let csrf = esc(s.csrf);
     let b = StrBuf::new();
-    b.push_str(f"<h1 class=\"t-h1\">Account</h1>\n<p class=\"t-lead\">Logged in with GitHub as <strong>{esc(a.login)}</strong>.</p>\n");
+    let shown = if a.name.is_empty() { a.login } else { a.name };
+    let gh = f"https://github.com/{esc(http::pct_encode(a.login))}";
+    b.push_str(f"<h1 class=\"t-h1\">Account</h1>\n<section class=\"profile\" aria-labelledby=\"profile\"><h2 class=\"sr-only\" id=\"profile\">Profile</h2>{layout::avatar(a.id, 80, false)}<div class=\"who-is\"><p class=\"t-h3\">{esc(shown)}</p><p>Logged in with GitHub as <a href=\"{gh}\"><strong>{esc(a.login)}</strong></a></p></div></section>\n");
+    b.push_str("<p class=\"t-small muted\">Your name, login and avatar come from your GitHub account; they are updated each time you log in.</p>\n");
     b.push_str(f"<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button class=\"btn-2 btn-sm\" type=\"submit\">Log out</button></form>\n");
     b.push_str("<h2 class=\"t-h3\">Publish tokens</h2>\n");
     let admin = is_admin(cfg, a.login);
     if !may_act(cfg, a.login) {
-        b.push_str("<p>Publishing is not open yet: this account can log in, but cannot create tokens, add trusted publishers, publish or yank. <a href=\"/publishing#publishing\">Publishing</a> says how it works.</p>\n");
+        b.push_str("<p>Publishing is not open yet: this account can log in, but cannot create tokens, add trusted publishers or owners, publish or yank. <a href=\"/publishing#publishing\">Publishing</a> says how it works.</p>\n");
         return page(site, path, "Account", b.to_str(), 200);
     }
     let trusted = managed(db, a.id, admin);
@@ -499,7 +599,33 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
     }
     b.push_str(f"<form method=\"post\" action=\"/me/tokens\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><label>Name <input name=\"name\" maxlength=\"64\" required></label> <button class=\"btn btn-sm\" type=\"submit\">Create token</button></form>\n");
     trusted_section(b, csrf, trusted);
+    owners_section(b, csrf, db, a.id, admin);
     page(site, path, "Account", b.to_str(), 200)
+}
+
+/// The owners of the stones the account manages (every stone with owners
+/// on record, for an admin), a remove button on each, and the add form.
+fn owners_section(b: StrBuf, csrf: str, db: Db, id: i64, admin: bool) {
+    b.push_str("<h2 class=\"t-h3\">Owners</h2>\n");
+    b.push_str("<p>A stone's owners publish and yank it and manage its trusted publishers and owners. A user logs in here once before being added. An organization or team (<code class=\"ic\">org/team</code>) is shown on the stone's page; its members publish through trusted publishing.</p>\n");
+    let rows = StrBuf::new();
+    for o in db.owners {
+        if o.name.starts_with("native/") || !may_manage(db, o.name, id, admin) { continue; }
+        let who: List<meta::Person> = List::new();
+        for x in o.accounts {
+            if let a: Account = account(db, x) { who.push(meta::Person { login: a.login, name: a.name, id: a.id }); }
+        }
+        for g in o.orgs { who.push(meta::Person { login: g.login, id: g.id, org: true }); }
+        for p in who {
+            rows.push_str(f"<tr><td>{esc(o.name)}</td><td>{layout::person_link(p, 20)}</td><td><form method=\"post\" action=\"/me/owners/remove\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><input type=\"hidden\" name=\"stone\" value=\"{esc(o.name)}\"><input type=\"hidden\" name=\"login\" value=\"{esc(p.login)}\"><button class=\"btn-2 btn-sm\" type=\"submit\">Remove</button></form></td></tr>\n");
+        }
+    }
+    if rows.is_empty() {
+        b.push_str("<p>No owners on record yet.</p>\n");
+    } else {
+        b.push_str(f"<div class=\"table-wrap\"><table class=\"tbl\">\n<thead><tr><th>Stone</th><th>Owner</th><th></th></tr></thead>\n<tbody>\n{rows.to_str()}</tbody>\n</table></div>\n");
+    }
+    b.push_str(f"<form method=\"post\" action=\"/me/owners\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><label>Stone <input name=\"stone\" maxlength=\"64\" required></label> <label>Owner <input name=\"login\" placeholder=\"login, org or org/team\" maxlength=\"80\" required></label> <button class=\"btn btn-sm\" type=\"submit\">Add</button></form>\n");
 }
 
 /// The trusted publishers of the stones the account manages, a remove
@@ -557,7 +683,17 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let a = account(db, s.account) ?? Account { id: 0i64, login: "", created: 0i64 };
     let admin = is_admin(cfg, a.login);
     if !may_act(cfg, a.login) {
-        return message(site, r.path, 403, "Publishing is not open yet", "This account can log in, but cannot create tokens, add trusted publishers, publish or yank yet.");
+        return message(site, r.path, 403, "Publishing is not open yet", "This account can log in, but cannot create tokens, add trusted publishers or owners, publish or yank yet.");
+    }
+    if r.path == "/me/owners" || r.path == "/me/owners/remove" {
+        let stone = (f.get("stone") ?? "").trim();
+        let who = (f.get("login") ?? "").trim();
+        if r.path == "/me/owners" {
+            try add_owner(cfg, db, a, admin, stone, who) catch e { return message(site, r.path, e.status, "Owner not added", e.msg); };
+        } else {
+            try remove_owner(cfg, db, a, admin, stone, who) catch e { return message(site, r.path, e.status, "Owner not removed", e.msg); };
+        }
+        return redirect("/me", []);
     }
     if r.path == "/me/trusted" {
         let p = TrustedPublisher { stone: (f.get("stone") ?? "").trim(), repository: (f.get("repository") ?? "").trim(), workflow: (f.get("workflow") ?? "").trim(), environment: (f.get("environment") ?? "").trim() };
@@ -655,12 +791,23 @@ fn stone_info(cfg: Cfg, db: Db, native: bool, name: str) throws (ApiError) -> Re
         f.insert("login", Value::Str(a.login));
         owners.push(Value::Struct { name: none, fields: f });
     }
+    let orgs: List<Value> = List::new();
+    for o in db.owners {
+        if o.name != k { continue; }
+        for g in o.orgs {
+            let f: Dict<str, Value> = Dict::new();
+            f.insert("id", Value::Int(Int::from(g.id)));
+            f.insert("login", Value::Str(g.login));
+            orgs.push(Value::Struct { name: none, fields: f });
+        }
+    }
+    let rels = fill_owner_ids(db);
     let list: List<Value> = List::new();
     for line in lines {
         let v = if let Value::Str(x) = line.get("version") ?? Value::None { x } else { "" };
         let yanked = line.get("yanked") == Value::Bool(true);
         let rel = Release { name: k, version: v, meta: meta::empty(), published_by: none, yanked_by: none, unyanked_by: none };
-        for r in db.releases {
+        for r in rels {
             if r.name == k && r.version == v { rel = r; }
         }
         let f: Dict<str, Value> = Dict::new();
@@ -676,7 +823,7 @@ fn stone_info(cfg: Cfg, db: Db, native: bool, name: str) throws (ApiError) -> Re
         f.insert("unyanked_by", actor_value(rel.unyanked_by));
         list.push(Value::Struct { name: "Version", fields: f });
     }
-    rokon_resp(200, "Stone", [("name", Value::Str(name)), ("native", Value::Bool(native)), ("owners", Value::List(owners)), ("versions", Value::List(list))])
+    rokon_resp(200, "Stone", [("name", Value::Str(name)), ("native", Value::Bool(native)), ("owners", Value::List(owners)), ("orgs", Value::List(orgs)), ("versions", Value::List(list))])
 }
 
 /// `GET /api/v1/stones/<name>/<version>/readme`: the README text sent
@@ -779,6 +926,8 @@ fn add_trusted(cfg: Cfg, db: Db, a: Account, admin: bool, p: TrustedPublisher) t
     };
     db.trusted.push(out);
     try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+    // A trusted publisher's repository owner is shown as an owner.
+    STALE.store(1);
     out
 }
 
@@ -798,6 +947,111 @@ fn remove_trusted(cfg: Cfg, db: Db, a: Account, admin: bool, id: str) throws (Ap
     if !gone { throw index::err(404, "no such trusted publisher"); }
     db.trusted = keep;
     try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+    STALE.store(1);
+}
+
+/// A GitHub user or organisation by name: GitHub's spelling, its id and
+/// whether it is an organisation.
+fn github_owner(cfg: Cfg, name: str) throws (ApiError) -> (str, i64, bool) {
+    let ua = "header = " + cq("User-Agent: rokstones.io") + "\n";
+    let text = try curl(f"url = {cq(cfg.api + "/users/" + name)}\n{ua}header = {cq("Accept: application/vnd.github+json")}\n") catch _ {
+        throw index::err(400, f"GitHub has no user or organization `{name}`");
+    };
+    let f = json::fields(text);
+    let login = f.get("login") ?? "";
+    let id = try (f.get("id") ?? "").parse::<i64>() catch _ { 0i64 };
+    if !is_login(login) || id <= 0i64 { throw index::err(502, "GitHub sent a malformed user"); }
+    (login, id, (f.get("type") ?? "") == "Organization")
+}
+
+/// Whether `who` may be written as an owner: a login, or `org/team`.
+pub fn owner_name(who: str) -> (str, str) | none {
+    let (org, team) = who.split_once("/") ?? (who, "");
+    if !is_login(org) { return none; }
+    if who.contains("/") {
+        if team.is_empty() || team.len() > 100 { return none; }
+        for c in team.chars() {
+            if !(c.is_ascii_alphanumeric() || c == '-' || c == '_') { return none; }
+        }
+    }
+    (org, team)
+}
+
+/// Where `db.owners` has `k`; a record is added when there is none.
+fn owner_at(db: Db, k: str) -> usize {
+    for i in 0..db.owners.len() {
+        if db.owners[i].name == k { return i; }
+    }
+    db.owners.push(Owner { name: k, accounts: List::new() });
+    db.owners.len() - 1
+}
+
+/// Whether account `a` may change the owners of stone `stone`, and its
+/// key: the stone is in the index and `a` manages it.
+fn owner_check(cfg: Cfg, db: Db, a: Account, admin: bool, stone: str) throws (ApiError) -> str {
+    if !stones::is_name(stone) { throw index::err(400, f"`{stone}` is not a stone name"); }
+    let k = index::key(stone);
+    if !may_manage(db, k, a.id, admin) { throw index::err(403, f"only the owners of `{stone}` and the admins change its owners"); }
+    if !(try index::exists(cfg.index, false, stone)) { throw index::err(404, f"`{stone}` is not in the index"); }
+    k
+}
+
+/// Add `who` to the owners of `stone` for account `a`: a user who has
+/// logged in here, an organisation, or `org/team`.
+fn add_owner(cfg: Cfg, db: Db, a: Account, admin: bool, stone: str, who: str) throws (ApiError) -> meta::Person {
+    let k = try owner_check(cfg, db, a, admin, stone);
+    let (org, team) = owner_name(who) ?? { throw index::err(400, f"`{who}` is not a GitHub name; write a user's login, an organization, or org/team"); };
+    let i = owner_at(db, k);
+    if db.owners[i].accounts.len() + db.owners[i].orgs.len() >= MAX_OWNERS { throw index::err(400, f"a stone has at most {MAX_OWNERS} owners; remove one first"); }
+    let out = meta::Person { login: who };
+    let user: Account | none = none;
+    if team.is_empty() {
+        for x in db.accounts {
+            if x.login.to_lowercase() == who.to_lowercase() { user = x; }
+        }
+    }
+    if let u: Account = user {
+        if db.owners[i].accounts.contains(u.id) { throw index::err(409, f"{u.login} already owns `{stone}`"); }
+        db.owners[i].accounts.push(u.id);
+        out = meta::Person { login: u.login, name: u.name, id: u.id };
+    } else {
+        let (name, id, is_org) = try github_owner(cfg, org);
+        if !is_org { throw index::err(400, f"{name} has not logged in to rokstones.io yet; a user logs in once before being added as an owner"); }
+        let login = if team.is_empty() { name } else { name + "/" + team.to_lowercase() };
+        for g in db.owners[i].orgs {
+            if g.login.to_lowercase() == login.to_lowercase() { throw index::err(409, f"{login} already owns `{stone}`"); }
+        }
+        db.owners[i].orgs.push(OrgOwner { login: login, id: id, added_by: a.login, added: now_secs() });
+        out = meta::Person { login: login, id: id, org: true };
+    }
+    try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+    STALE.store(1);
+    out
+}
+
+/// Remove `who` (a login, an organisation or `org/team`) from the owners
+/// of `stone` for account `a`.
+fn remove_owner(cfg: Cfg, db: Db, a: Account, admin: bool, stone: str, who: str) throws (ApiError) {
+    let k = try owner_check(cfg, db, a, admin, stone);
+    let w = who.to_lowercase();
+    let gone = false;
+    for i in 0..db.owners.len() {
+        if db.owners[i].name != k { continue; }
+        let ids: List<i64> = List::new();
+        for id in db.owners[i].accounts {
+            let l = (account(db, id) ?? Account { id: id, login: "", created: 0i64 }).login;
+            if l.to_lowercase() == w { gone = true; } else { ids.push(id); }
+        }
+        let orgs: List<OrgOwner> = List::new();
+        for g in db.owners[i].orgs {
+            if g.login.to_lowercase() == w { gone = true; } else { orgs.push(g); }
+        }
+        db.owners[i].accounts = ids;
+        db.owners[i].orgs = orgs;
+    }
+    if !gone { throw index::err(404, f"`{who}` does not own `{stone}`"); }
+    try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+    STALE.store(1);
 }
 
 /// The issuer's key `kid`: from the cached JWKS, else fetched again (at
@@ -935,6 +1189,8 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
         ("GET", "/api/v1/trusted-publishers"),
         ("POST", "/api/v1/trusted-publishers"),
         ("POST", "/api/v1/trusted-publishers/remove"),
+        ("POST", "/api/v1/owners"),
+        ("POST", "/api/v1/owners/remove"),
     ];
     let methods: List<str> = List::new();
     for (m, p) in routes {
@@ -987,6 +1243,23 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
             throw index::err(400, f"the body is `TrustedPublisher {{ stone: .., repository: \"owner/repo\", workflow: \"publish.yml\", environment: \"\" }}`: {e}");
         };
         return rokon_value(200, rokon::to_value(try add_trusted(cfg, db, a, auth.admin, p)));
+    }
+    if r.path.starts_with("/api/v1/owners") {
+        if trusted { throw index::err(403, "owners are managed with an account's token, not a trusted publishing one"); }
+        let want = index::err(400, "the body is `Owner { stone: \"..\", login: \"user, org or org/team\" }`");
+        let stone = "";
+        let who = "";
+        if let Value::Struct { name: _, fields } = try rokon::parse(r.body) catch _ { throw want; } {
+            if let Value::Str(x) = fields.get("stone") ?? Value::None { stone = x; }
+            if let Value::Str(x) = fields.get("login") ?? Value::None { who = x; }
+        }
+        if stone.is_empty() || who.is_empty() { throw want; }
+        if r.path == "/api/v1/owners/remove" {
+            try remove_owner(cfg, db, auth.account, auth.admin, stone, who);
+            return rokon_resp(200, "Removed", [("stone", Value::Str(stone)), ("login", Value::Str(who))]);
+        }
+        let p = try add_owner(cfg, db, auth.account, auth.admin, stone, who);
+        return rokon_resp(200, "Added", [("stone", Value::Str(stone)), ("login", Value::Str(p.login)), ("org", Value::Bool(p.org))]);
     }
     if !trusted && !may_act(cfg, auth.login) { throw index::err(403, "Publishing is not open yet"); }
     try index::sync(cfg.index);
@@ -1122,7 +1395,7 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let get = r.method == "GET" || r.method == "HEAD";
     if p == "/login" && get { return try login(cfg); }
     if p == "/auth/github/callback" && get { return try callback(cfg, site, r); }
-    if (p == "/me" && get) || (post && (p == "/logout" || p == "/me/tokens" || (p.starts_with("/me/tokens/") && p.ends_with("/revoke")) || p == "/me/trusted" || (p.starts_with("/me/trusted/") && p.ends_with("/remove")))) {
+    if (p == "/me" && get) || (post && (p == "/logout" || p == "/me/tokens" || (p.starts_with("/me/tokens/") && p.ends_with("/revoke")) || p == "/me/trusted" || (p.starts_with("/me/trusted/") && p.ends_with("/remove")) || p == "/me/owners" || p == "/me/owners/remove")) {
         return try account_route(cfg, site, r);
     }
     if !get { return message(site, p, 405, "Method not allowed", "Only GET here."); }
@@ -1186,6 +1459,43 @@ fn read_page(site: Site, path: str, file: str) -> List<u8> | none {
     none
 }
 
+const HTML_TYPE: str = "Content-Type: text/html; charset=utf-8";
+
+/// A logged-in request's account and its session's CSRF token.
+struct Viewer {
+    account: Account;
+    csrf: str;
+}
+
+/// Who a request with a live session cookie is; none without one.
+fn viewer(cfg: Cfg, r: Request) -> Viewer | none {
+    if http::cookie(r, "rks_session").is_empty() { return none; }
+    let db: Db | none = none;
+    using g = LOCK.lock() {
+        db = try? load_db(cfg);
+    }
+    let d = db ?? { return none; };
+    let s = session_of(d, r) ?? { return none; };
+    let a = account(d, s.account) ?? { return none; };
+    Viewer { account: a, csrf: s.csrf }
+}
+
+/// `resp` with the header's login button turned into the account menu,
+/// and kept out of every cache.
+fn signed_in(site: Site, r: Request, resp: Resp, v: Viewer) -> Resp {
+    let text = resp.body;
+    if !resp.file.is_empty() {
+        let data = read_page(site, r.path, resp.file) ?? { return resp; };
+        text = (try? str::from_utf8(data)) ?? { return resp; };
+    }
+    let headers: List<str> = List::new();
+    for h in resp.headers {
+        if !h.starts_with("Cache-Control:") { headers.push(h); }
+    }
+    headers.push("Cache-Control: no-store");
+    Resp { status: resp.status, headers: headers, body: layout::signed_in(text, v.account.login, v.account.id, v.csrf), file: "" }
+}
+
 fn handle(s: TcpStream, cfg: Cfg, site: Site) {
     let t0 = Instant::now();
     let r = try http::read_request(s, http::MAX_BODY, Duration::secs(30)) catch e {
@@ -1197,6 +1507,9 @@ fn handle(s: TcpStream, cfg: Cfg, site: Site) {
         eprintln(f"{r.method} {r.path}: {e}");
         message(site, r.path, 500, "Server error", "Something went wrong.")
     };
+    if resp.headers.contains(HTML_TYPE) {
+        if let v: Viewer = viewer(cfg, r) { resp = signed_in(site, r, resp, v); }
+    }
     let sent = resp.status;
     if !resp.file.is_empty() {
         if let data: List<u8> = read_page(site, r.path, resp.file) {
@@ -1233,11 +1546,13 @@ pub fn etag_matches(header: str, tag: str) -> bool {
 /// that already has it a 304. The status sent.
 fn respond(s: TcpStream, r: Request, status: i32, headers: List<str>, body: List<u8>) -> i32 {
     let head = r.method == "HEAD";
-    if headers.contains("Content-Type: text/html; charset=utf-8") {
+    if headers.contains(HTML_TYPE) {
         let text = (try? str::from_utf8(body)) ?? "";
         headers.push(if text.contains("<select") { CSP_SELECT } else { CSP });
         headers.push(http::REPORTING);
         headers.push(http::SPECULATION);
+        // The header differs for a logged-in session (signed_in).
+        headers.push("Vary: Cookie");
     }
     if status == 200 && (r.method == "GET" || head) && !headers.contains("Cache-Control: no-store") {
         let tag = http::etag(body);
@@ -1394,6 +1709,51 @@ fn trusted_scope() {
     expect(may(owner, db, "geom", true) && !may(owner, db, "json", true), "account");
     expect(may_manage(db, "geom", 5i64, false) && !may_manage(db, "geom", 6i64, false), "owners manage");
     expect(!may_manage(db, "markdown", 5i64, false) && may_manage(db, "markdown", 6i64, true), "unowned names are the admins'");
+}
+
+#[test]
+fn owners() {
+    // An old data file: accounts without names, owners without orgs.
+    let db: Db = try rokon::from_str("Db { accounts: [Account { id: 5, login: \"ann\", created: 1 }, Account { id: 6, login: \"bob\", created: 1, name: \"Bob B\" }], sessions: [], tokens: [], owners: [Owner { name: \"geom\", accounts: [5, 6] }] }") catch e { panic(f"{e}"); };
+    expect(db.accounts[0].name.is_empty() && db.owners[0].orgs.is_empty(), "old data file");
+    db.owners[0].orgs.push(OrgOwner { login: "acme/release", id: 42i64 });
+    db.trusted = [TrustedPublisher { stone: "geom", repository: "acme/geom", owner_id: 42i64, workflow: "publish.yml" }, TrustedPublisher { stone: "json", repository: "rok-lang/json", owner_id: 341800840i64, workflow: "publish.yml" }];
+    let ps = owners_for(db, "geom");
+    let names: List<str> = List::new();
+    for p in ps { names.push(f"{p.login}:{p.id}:{p.name}:{p.org}:{p.derived}"); }
+    expect(names.join(",") == "ann:5::false:false,bob:6:Bob B:false:false,acme/release:42::true:false,acme:42::false:true", names.join(","));
+    // No owners on record: the trusted publisher's repository owner, and
+    // that of a trusted publish recorded before owner ids were.
+    let v = meta::Via { repository: "rok-lang/json", workflow: "publish.yml" };
+    db.releases = [Release { name: "json", version: "0.2.0", meta: meta::empty(), published_by: Actor { id: 3i64, login: "carol", at: 1i64, via: v }, yanked_by: none, unyanked_by: none }];
+    let js = owners_for(db, "json");
+    expect(js.len() == 1 && js[0].login == "rok-lang" && js[0].id == 341800840i64 && js[0].derived, f"{js.len()}");
+    let filled = fill_owner_ids(db)[0].published_by ?? nobody_did();
+    expect((filled.via ?? v).owner_id == 341800840i64 && filled.id == 3i64, "owner id filled in");
+    db.trusted = List::new();
+    let only = owners_for(db, "json");
+    expect(only.len() == 1 && only[0].login == "rok-lang" && only[0].id == 0i64, "publish without an id");
+    expect(owners_for(db, "nothing").is_empty(), "unknown stone");
+}
+
+#[test]
+fn owner_rights() {
+    let db = Db { accounts: [Account { id: 5i64, login: "ann", created: 0i64 }], sessions: List::new(), tokens: List::new(), owners: [Owner { name: "geom", accounts: [5i64] }] };
+    let cfg = Cfg { url: "", addr: "", client_id: "", client_secret: "", admins: ",alice,", data: "", index: "/nonexistent", oauth: "", api: "" };
+    let bob = Account { id: 6i64, login: "bob", created: 0i64 };
+    // Refused before the index or GitHub is asked.
+    let s = [0, 0, 0, 0, 0];
+    try owner_check(cfg, db, bob, false, "geom") catch e { s[0] = e.status; "" };
+    try add_owner(cfg, db, bob, false, "geom", "bob") catch e { s[1] = e.status; meta::Person { login: "" } };
+    try remove_owner(cfg, db, bob, false, "geom", "ann") catch e { s[2] = e.status; };
+    try owner_check(cfg, db, bob, false, "json") catch e { s[3] = e.status; "" };
+    try owner_check(cfg, db, bob, false, "Not A Name") catch e { s[4] = e.status; "" };
+    expect(s[0] == 403 && s[1] == 403 && s[2] == 403, f"a non-owner changes owners: {s:?}");
+    expect(s[3] == 403 && s[4] == 400, f"unowned stone, bad name: {s:?}");
+    expect(db.owners[0].accounts.len() == 1 && db.owners[0].orgs.is_empty(), "nothing changed");
+    expect(!(owner_name("acme") is none) && !(owner_name("serde-rs/publish") is none), "names");
+    expect(owner_name("") is none && owner_name("a b") is none && owner_name("acme/") is none && owner_name("acme/x/y") is none && owner_name("../x") is none, "bad names");
+    expect(display_name("null").is_empty() && display_name(" Ann\nLee ") == "Ann Lee" && display_name("x".repeat(200)).len() == 100, "display names");
 }
 
 #[test]
