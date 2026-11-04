@@ -62,6 +62,8 @@ mark{background:none;color:var(--ink);font-weight:600;text-decoration:underline;
 .gl-box{width:72px;height:72px;flex:none;border-radius:18px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;background:var(--bg-2)}
 /* grey above for engines without oklch() (Safari < 15.4) */
 @supports (color:oklch(0 0 0)){
+  /* a stone's hue, layout::hue_class */
+  .h0{--h:0}.h1{--h:10}.h2{--h:20}.h3{--h:30}.h4{--h:40}.h5{--h:50}.h6{--h:60}.h7{--h:70}.h8{--h:80}.h9{--h:90}.h10{--h:100}.h11{--h:110}.h12{--h:120}.h13{--h:130}.h14{--h:140}.h15{--h:150}.h16{--h:160}.h17{--h:170}.h18{--h:180}.h19{--h:190}.h20{--h:200}.h21{--h:210}.h22{--h:220}.h23{--h:230}.h24{--h:240}.h25{--h:250}.h26{--h:260}.h27{--h:270}.h28{--h:280}.h29{--h:290}.h30{--h:300}.h31{--h:310}.h32{--h:320}.h33{--h:330}.h34{--h:340}.h35{--h:350}
   .gl path{fill:oklch(0.7 0.11 var(--h))}
   .gl-box{background:oklch(0.95 0.035 var(--h))}
   .gl-box .gl path{fill:oklch(0.66 0.14 var(--h))}

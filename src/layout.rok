@@ -116,15 +116,18 @@ fn name_hash(name: str) -> i64 {
 
 const PEBBLE: str = "M30 4C47 3 61 15 61 31C62 48 49 61 33 61C15 61 3 50 3 33C2 16 14 5 30 4Z";
 
-/// `<svg>` of the glyph, `px` square; the colour comes from `--h` in CSS.
+/// `<svg>` of the glyph, `px` square; the colour comes from its hue class
+/// (hue_class) in CSS.
 fn glyph(name: str, px: i32, cls: str) -> str {
     let h = name_hash(name);
     let k = 80i64 + h % 25i64;
     let sx = if k >= 100i64 { f"1.0{k - 100i64}" } else { f"0.{k}" };
-    f"<svg class=\"{cls}\" width=\"{px}\" height=\"{px}\" viewBox=\"0 0 64 64\" aria-hidden=\"true\" style=\"--h:{h % 360i64}\"><path d=\"{PEBBLE}\" transform=\"rotate({h % 70i64 - 35i64} 32 32) translate(32 32) scale({sx} 1) translate(-32 -32)\"/></svg>"
+    f"<svg class=\"{cls} {hue_class(name)}\" width=\"{px}\" height=\"{px}\" viewBox=\"0 0 64 64\" aria-hidden=\"true\"><path d=\"{PEBBLE}\" transform=\"rotate({h % 70i64 - 35i64} 32 32) translate(32 32) scale({sx} 1) translate(-32 -32)\"/></svg>"
 }
 
-pub fn hue(name: str) -> i64 { name_hash(name) % 360i64 }
+/// `h0` .. `h35`: the stone's hue in 10° steps, as a class that sets
+/// `--h` (style.css). The CSP refuses style="".
+pub fn hue_class(name: str) -> str { f"h{name_hash(name) % 360i64 / 10i64}" }
 
 fn icon_search() -> str {
     "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"M20 20l-4-4\"/></svg>"
@@ -585,7 +588,7 @@ fn stone_head(s: Stone, tab: str) -> str {
     if !tree.is_empty() { tabs.push_str(f"<a href=\"{esc(tree)}\">Source <span aria-hidden=\"true\">↗</span></a>"); }
     f"<div class=\"frame stone-head\">
 <nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/stones\">stones</a> / {crumbs(s, tab)}</nav>
-<div class=\"title\"><span class=\"gl-box\" style=\"--h:{hue(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.version)}</span></div>{about}</div></div>
+<div class=\"title\"><span class=\"gl-box {hue_class(s.name)}\">{glyph(s.name, 44, "gl")}</span><div class=\"what\"><div class=\"name-line\"><h1>{esc(s.name)}</h1><span class=\"ver{if l.yanked { " gone" } else { "" }}\">{esc(l.version)}</span></div>{about}</div></div>
 <p class=\"sum t-small\"><span>{sum.join("</span> · <span>")}</span></p>
 {notice}{inst}<div class=\"tabs-line\"><nav class=\"tabs\" aria-label=\"Stone sections\">{tabs.to_str()}</nav></div>
 </div>
