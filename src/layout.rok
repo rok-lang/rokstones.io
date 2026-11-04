@@ -656,8 +656,8 @@ fn when_tag(iso: str, class: str, short: bool) -> str {
 }
 
 /// Who did it, after "by": a GitHub user, or for a trusted publish the
-/// user who triggered the run, "via GitHub Actions", the repository and
-/// the run; "" when not known.
+/// repository's owner "via GitHub Actions", the repository and the run;
+/// "" when not known.
 pub fn actor_link(a: meta::Actor | none) -> str {
     let x = a ?? { return ""; };
     let v = x.via ?? { return if x.login.is_empty() { "" } else { login_link(x.login) }; };
@@ -667,15 +667,14 @@ pub fn actor_link(a: meta::Actor | none) -> str {
     let (href, title) = if run.is_empty() { (f"{repo}/actions/workflows/{wf}", v.ref) } else { (esc(run), f"{v.ref}, run {v.run_id}") };
     let tip = if title.is_empty() { "" } else { f" title=\"{esc(title)}\"" };
     let how = f"GitHub Actions (<a href=\"{repo}\">{esc(v.repository)}</a>, <a href=\"{href}\"{tip}>{esc(v.workflow)}</a>)";
-    if x.login.is_empty() { how } else { f"{login_link(x.login)} via {how}" }
+    f"{login_link(meta::owner_of(v))} via {how}"
 }
 
 /// `actor_link` as plain text, for a title attribute.
 pub fn actor_text(a: meta::Actor | none) -> str {
     let x = a ?? { return ""; };
     let v = x.via ?? { return x.login; };
-    let how = f"GitHub Actions ({v.repository}, {v.workflow})";
-    if x.login.is_empty() { how } else { f"{x.login} via {how}" }
+    f"{meta::owner_of(v)} via GitHub Actions ({v.repository}, {v.workflow})"
 }
 
 fn side(site: Site, s: Stone) -> str {
@@ -945,12 +944,12 @@ fn publishers() {
     assert(actor_link(ann) == "<a href=\"https://github.com/ann\">ann</a>", actor_link(ann));
     let v = meta::Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.2.0", run_id: "123", run_attempt: "1" };
     let t = meta::Actor { id: 7i64, login: "ann", at: 1i64, via: v };
-    let want = "<a href=\"https://github.com/ann\">ann</a> via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/runs/123\" title=\"refs/tags/v0.2.0, run 123\">publish.yml</a>)";
+    let want = "<a href=\"https://github.com/rok-lang\">rok-lang</a> via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/runs/123\" title=\"refs/tags/v0.2.0, run 123\">publish.yml</a>)";
     assert(actor_link(t) == want, actor_link(t));
-    assert(actor_text(t) == "ann via GitHub Actions (rok-lang/json, publish.yml)", actor_text(t));
+    assert(actor_text(t) == "rok-lang via GitHub Actions (rok-lang/json, publish.yml)", actor_text(t));
     let w = meta::Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.2.0" };
     let anon = meta::Actor { id: 0i64, login: "", at: 1i64, via: w };
-    let w2 = "GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/workflows/publish.yml\" title=\"refs/tags/v0.2.0\">publish.yml</a>)";
+    let w2 = "<a href=\"https://github.com/rok-lang\">rok-lang</a> via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/workflows/publish.yml\" title=\"refs/tags/v0.2.0\">publish.yml</a>)";
     assert(actor_link(anon) == w2, actor_link(anon));
     let old = meta::Actor { id: 0i64, login: "github:acme/geom/.github/workflows/publish.yml@refs/tags/v1", at: 1i64 };
     assert(actor_link(old).contains("(trusted publishing)"), actor_link(old));
