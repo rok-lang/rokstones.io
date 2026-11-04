@@ -1004,6 +1004,9 @@ fn rebuild_loop(index_dir: str, data: str, out: str) {
 pub fn serve(site: Site) throws {
     let cfg = try load_cfg(".env");
     if !fs::exists(cfg.index + "/.git") { throw ApiError { status: 0, msg: f"ROKSTONES_INDEX={cfg.index} is not a git checkout" }; }
+    // Start from the index's state: lines pushed by others (a deploy, an
+    // --index-dir publish) reach the checkout only through a sync.
+    try index::sync(cfg.index) catch e { eprintln(f"index sync: {e.msg}"); };
     try fs::create_dir_all(cfg.data);
     // Fail now on a bad data file, not on the first request.
     _ = try load_db(cfg);
