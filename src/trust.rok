@@ -251,7 +251,8 @@ pub fn merge_seeds(kept: List<TrustedPublisher>, seeds: List<TrustedPublisher>) 
 pub fn via_of(c: Dict<str, str>) -> meta::Via | none {
     let (repo, file, r) = meta::split_workflow_ref(c.get("workflow_ref") ?? "") ?? { return none; };
     if !is_repo(repo) { return none; }
-    meta::Via { repository: repo, workflow: file, ref: c.get("ref") ?? r, run_id: c.get("run_id") ?? "", run_attempt: c.get("run_attempt") ?? "" }
+    let oid = try (c.get("repository_owner_id") ?? "").parse::<i64>() catch _ { 0i64 };
+    meta::Via { repository: repo, workflow: file, ref: c.get("ref") ?? r, run_id: c.get("run_id") ?? "", run_attempt: c.get("run_attempt") ?? "", owner_id: if oid > 0i64 { oid } else { 0i64 } }
 }
 
 /// The GitHub user who triggered the run: login and numeric id; "" and
@@ -410,7 +411,7 @@ fn claim_matching() {
     let run = claims(",\"actor\":\"ann\",\"actor_id\":\"77\",\"run_id\":\"123\",\"run_attempt\":\"2\"");
     let rc = (try! parse_jwt(sign(HEADER, run))).claims;
     let v = via_of(rc) ?? { panic("no via"); };
-    expect(v.repository == "acme/geom" && v.workflow == "publish.yml" && v.ref == "refs/tags/v1.0.0" && v.run_id == "123" && v.run_attempt == "2", f"{v.workflow}");
+    expect(v.repository == "acme/geom" && v.workflow == "publish.yml" && v.ref == "refs/tags/v1.0.0" && v.run_id == "123" && v.run_attempt == "2" && v.owner_id == 42i64, f"{v.workflow}");
     let (al, ai) = actor_of(rc);
     expect(al == "ann" && ai == 77i64, "actor");
     let (nl, ni) = actor_of(c);

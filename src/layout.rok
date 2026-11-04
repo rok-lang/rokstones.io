@@ -188,6 +188,42 @@ fn footer(site: Site) -> str {
     })
 }
 
+/// Every page is built logged out; `serve` swaps this for the account
+/// menu (signed_in) on a request with a live session.
+pub const LOGIN_BUTTON: str = "<a class=\"btn-2 btn-sm login\" href=\"/login\">Log in<span class=\"wide\"> with GitHub</span></a>";
+
+/// `html` with the login button replaced by account `login`'s menu: its
+/// avatar and login, the account page, and a log-out form carrying the
+/// session's `csrf`. A `<details>`, so it needs no script.
+pub fn signed_in(html: str, login: str, id: i64, csrf: str) -> str {
+    let menu = f"<details class=\"user\"><summary class=\"btn-2 btn-sm\" aria-label=\"Account menu of {esc(login)}\">{avatar(id, 20, false)}<span class=\"wide\">{esc(login)}</span></summary><div class=\"user-menu\"><p class=\"t-small\">Logged in as <strong>{esc(login)}</strong></p><a href=\"/me\">Account</a><form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{esc(csrf)}\"><button type=\"submit\">Log out</button></form></div></details>";
+    html.replace(LOGIN_BUTTON, menu)
+}
+
+/// GitHub's avatar of `id`, `px` square (drawn at twice that); "" when the
+/// id is not known. An organisation's has rounded corners, a user's is round.
+pub fn avatar(id: i64, px: i32, org: bool) -> str {
+    let src = meta::avatar_url(id, px * 2);
+    if src.is_empty() { return ""; }
+    f"<img class=\"av{if org { " org" } else { "" }}\" src=\"{src}\" width=\"{px}\" height=\"{px}\" alt=\"\" loading=\"lazy\" decoding=\"async\">"
+}
+
+/// `p`'s GitHub page: a user's or organisation's profile, a team's page.
+pub fn github_page(login: str) -> str {
+    if let (org, team) = login.split_once("/") ?? ("", "") {
+        if !org.is_empty() { return f"https://github.com/orgs/{http::pct_encode(org)}/teams/{http::pct_encode(team)}"; }
+    }
+    f"https://github.com/{http::pct_encode(login)}"
+}
+
+/// `p` with its avatar, linked to GitHub: the display name when it has
+/// one (the login as the tooltip), else the login.
+pub fn person_link(p: meta::Person, px: i32) -> str {
+    let tip = if p.name.is_empty() { "" } else { f" title=\"{esc(p.login)}\"" };
+    let text = if p.name.is_empty() { p.login } else { p.name };
+    f"<a class=\"who\" href=\"{esc(github_page(p.login))}\"{tip}>{avatar(p.id, px, p.org || p.login.contains("/"))}<span>{esc(text)}</span></a>"
+}
+
 /// `page` with a `<meta name="description">` of its own.
 pub fn page(site: Site, out: str, title: str, body: str) -> str { page_desc(site, out, title, "", body) }
 
@@ -204,14 +240,6 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
     let cur = |on: bool| if on { " aria-current=\"page\"" } else { "" };
     let browse = cur(out == "stones/index.html" || out.starts_with("stones/"));
     let publish = cur(out == "publishing.html");
-    // The server's own pages (`me`, `me/..`) belong to a logged-in account.
-    // While publishing is closed only admins log in, at /login directly.
-    let mine = out == "me" || out.starts_with("me/");
-    let account = if mine {
-        f"<a class=\"btn-2 btn-sm login\" href=\"/me\" aria-current=\"page\">Account</a>\n"
-    } else if site.publishing {
-        f"<a class=\"btn-2 btn-sm login\" href=\"/login\">Log in<span class=\"wide\"> with GitHub</span></a>\n"
-    } else { "" };
     f"<!doctype html>
 <html lang=\"en\" class=\"rk lt\">
 <head>
@@ -224,7 +252,8 @@ pub fn page_desc(site: Site, out: str, title: str, about: str, body: str, img: s
 {search_box()}
 <nav id=\"nav\" class=\"nav\" aria-label=\"Registry\"><a href=\"/stones\"{browse}>Browse</a><a href=\"/publishing\"{publish}>Publishing</a><a href=\"{esc(site.docs)}/latest\">Docs</a></nav>
 {chrome::theme_button(false)}
-{account}<button class=\"ib menu\" type=\"button\" aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"M4 7h16M4 12h16M4 17h16\"/></svg></button>
+{LOGIN_BUTTON}
+<button class=\"ib menu\" type=\"button\" aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"M4 7h16M4 12h16M4 17h16\"/></svg></button>
 </div>
 </header>
 <main id=\"content\">
@@ -658,16 +687,28 @@ fn when_tag(iso: str, class: str, short: bool) -> str {
 /// Who did it, after "by": a GitHub user, or for a trusted publish the
 /// repository's owner "via GitHub Actions", the repository and the run;
 /// "" when not known.
-pub fn actor_link(a: meta::Actor | none) -> str {
+pub fn actor_link(a: meta::Actor | none, name: str = "") -> str {
     let x = a ?? { return ""; };
-    let v = x.via ?? { return if x.login.is_empty() { "" } else { login_link(x.login) }; };
+    let who = by_link(x, name);
+    let v = x.via ?? { return who; };
     let repo = f"https://github.com/{esc(v.repository)}";
     let run = meta::run_url(v);
     let wf = esc(http::pct_encode(v.workflow));
     let (href, title) = if run.is_empty() { (f"{repo}/actions/workflows/{wf}", v.ref) } else { (esc(run), f"{v.ref}, run {v.run_id}") };
     let tip = if title.is_empty() { "" } else { f" title=\"{esc(title)}\"" };
     let how = f"GitHub Actions (<a href=\"{repo}\">{esc(v.repository)}</a>, <a href=\"{href}\"{tip}>{esc(v.workflow)}</a>)";
-    f"{login_link(meta::owner_of(v))} via {how}"
+    f"{who} via {how}"
+}
+
+/// Who did it, short: the account or the repository's owner with its
+/// avatar, `name` its display name; "" when not known.
+pub fn by_link(x: meta::Actor, name: str = "") -> str {
+    // Recorded before the run was: the workflow ref as the login.
+    if x.login.starts_with("github:") { return login_link(x.login); }
+    let p = meta::person_of(x);
+    if p.login.is_empty() { return ""; }
+    if x.via is none { p.name = name; }
+    person_link(p, 16)
 }
 
 /// `actor_link` as plain text, for a title attribute.
@@ -686,16 +727,11 @@ fn side(site: Site, s: Stone) -> str {
     let shown = esc(src.replace("https://", "").strip_suffix(".git") ?? src.replace("https://", "")).replace("/", "/<wbr>");
     let repo_html = if repo.is_empty() { f"<code>{shown}</code>" } else { f"<a href=\"{esc(repo)}\">{shown}</a>" };
     let kv = StrBuf::new();
-    let pb = actor_link(l.by);
+    let pb = actor_link(l.by, l.by_name);
     if !l.date.is_empty() || !pb.is_empty() {
         let when = if l.date.is_empty() { "" } else { when_tag(l.date, "", false) };
         let who = if pb.is_empty() { "" } else { f"{if when.is_empty() { "by" } else { " by" }} {pb}" };
         kv.push_str(f"<dt>Published</dt><dd>{when}{who}</dd>");
-    }
-    if !s.owners.is_empty() {
-        let os: List<str> = List::new();
-        for o in s.owners { os.push(login_link(o)); }
-        kv.push_str(f"<dt>{if os.len() == 1 { "Owner" } else { "Owners" }}</dt><dd>{os.join(", ")}</dd>");
     }
     if !m.license.is_empty() { kv.push_str(f"<dt>License</dt><dd>{esc(m.license)}</dd>"); }
     if !l.toolchain.is_empty() { kv.push_str(f"<dt>Toolchain</dt><dd class=\"mono\">rok {esc(l.toolchain)}</dd>"); }
@@ -749,9 +785,44 @@ fn side(site: Site, s: Stone) -> str {
     f"<aside class=\"meta\" aria-label=\"Stone details\">
 <section class=\"inst-side\"><h2 class=\"t-label\">Install</h2>{install_box(s, "i")}</section>
 <dl class=\"kv\">{kv.to_str()}<dt>Repository</dt><dd>{repo_html}</dd><dt>Commit</dt><dd class=\"mono\">{commit_link(l)}</dd><dt>Tree hash</dt><dd class=\"mono\"><code title=\"{esc(l.tree)}\">{short(l.tree)}</code></dd><dt>Index file</dt><dd class=\"mono\"><a href=\"{esc(site.index_repo)}/blob/main/{esc(s.file)}\">{esc(s.file)}</a></dd></dl>
-<section class=\"version\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{dates_note(s)}{more}</section>
+{owners_box(s)}{publishers_box(s)}<section class=\"vers\"><h2 class=\"t-label\">Versions</h2><ul>{vb.to_str()}</ul>{dates_note(s)}{more}</section>
 </aside>
 "
+}
+
+/// The side panel's Owners: each with its avatar, linked to GitHub; ""
+/// when none is known.
+fn owners_box(s: Stone) -> str {
+    if s.owners.is_empty() { return ""; }
+    let b = StrBuf::new();
+    for p in s.owners {
+        let note = if p.derived { " <span class=\"t-small muted\" title=\"Owner of a trusted publisher's repository\">trusted publishing</span>" } else { "" };
+        b.push_str(f"<li>{person_link(p, 24)}{note}</li>");
+    }
+    f"<section class=\"owners\" aria-labelledby=\"owners\"><h2 class=\"t-label\" id=\"owners\">Owners</h2><ul class=\"people\">{b.to_str()}</ul></section>\n"
+}
+
+/// Everyone who published a version, with how many, when more than one
+/// did; "" otherwise.
+fn publishers_box(s: Stone) -> str {
+    let order: List<str> = List::new();
+    let link: Dict<str, str> = Dict::new();
+    let count: Dict<str, usize> = Dict::new();
+    for v in s.versions {
+        let a = v.by ?? { continue; };
+        let key = meta::person_of(a).login.to_lowercase();
+        if key.is_empty() { continue; }
+        if !link.contains_key(key) {
+            order.push(key);
+            link.insert(key, by_link(a, v.by_name));
+            count.insert(key, 0usize);
+        }
+        count[key] = count[key] + 1;
+    }
+    if order.len() < 2 { return ""; }
+    let b = StrBuf::new();
+    for k in order { b.push_str(f"<li>{link[k]} <span class=\"t-small muted\">{plural(count[k], "version", "versions")}</span></li>"); }
+    f"<section class=\"publishers\" aria-labelledby=\"published-by\"><h2 class=\"t-label\" id=\"published-by\">Published by</h2><ul class=\"people\">{b.to_str()}</ul></section>\n"
 }
 
 /// `https://x.org/a/` as `x.org/a`.
@@ -829,13 +900,18 @@ pub fn versions_page(site: Site, s: Stone) -> str {
         }
         if stones::is_pre(v.version) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
         let when = if v.date.is_empty() { "<span class=\"muted\">unknown</span>" } else { when_tag(v.date, "", false) };
-        let pb = actor_link(v.by);
-        let who = if pb.is_empty() { "<span class=\"muted\">unknown</span>" } else { pb };
-        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><a class=\"v\" href=\"{page}\">{esc(v.version)}</a>{tags.to_str()}</td><td>{when}</td><td>{who}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.tree)}\">{short(v.tree)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
+        let none_yet = "<span class=\"muted\">unknown</span>";
+        let who = if let a: meta::Actor = v.by {
+            let pb = by_link(a, v.by_name);
+            if pb.is_empty() { none_yet } else if a.via is none { pb } else { f"<span class=\"via\" title=\"{esc(actor_text(a))}\">{pb}</span>" }
+        } else { none_yet };
+        let sz = if let n: i64 = v.meta.size { size(n) } else { "<span class=\"muted\">unknown</span>" };
+        let tc = if v.toolchain.is_empty() { "<span class=\"muted\">any</span>" } else { f"rok {esc(v.toolchain)}" };
+        b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><a class=\"v\" href=\"{page}\">{esc(v.version)}</a>{tags.to_str()}</td><td>{when}</td><td class=\"by\">{who}</td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td><td>{sz}</td><td class=\"mono\">{tc}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.tree)}\">{short(v.tree)}</code></td></tr>");
     }
     let body = f"<h2 class=\"t-h3\">{plural(s.versions.len(), "version", "versions")}</h2>
-<p class=\"t-ui muted\">Newest first. Published is the date the version's line was added to the index. A yanked version stays in the index for the projects that pinned it; new resolves skip it.</p>
-<div class=\"table-wrap\"><table class=\"tbl\"><thead><tr><th scope=\"col\">Version</th><th scope=\"col\">Published</th><th scope=\"col\">By</th><th scope=\"col\">Commit</th><th scope=\"col\">Tree hash</th><th scope=\"col\">License</th></tr></thead><tbody>{b.to_str()}</tbody></table></div>
+<p class=\"t-ui muted\">Newest first. Published is when the version's line was added to the index (UTC); size is the stone as <code class=\"ic\">rok publish</code> packed it. A yanked version stays in the index for the projects that pinned it; new resolves skip it.</p>
+<div class=\"table-wrap\"><table class=\"tbl\"><thead><tr><th scope=\"col\">Version</th><th scope=\"col\">Published</th><th scope=\"col\">By</th><th scope=\"col\">License</th><th scope=\"col\">Size</th><th scope=\"col\">Toolchain</th><th scope=\"col\">Commit</th><th scope=\"col\">Tree hash</th></tr></thead><tbody>{b.to_str()}</tbody></table></div>
 ";
     stone_frame(site, s, "versions", body)
 }
@@ -941,16 +1017,33 @@ fn near_names() {
 fn publishers() {
     assert(actor_link(none).is_empty() && actor_text(none).is_empty(), "unknown");
     let ann = meta::Actor { id: 7i64, login: "ann", at: 1i64 };
-    assert(actor_link(ann) == "<a href=\"https://github.com/ann\">ann</a>", actor_link(ann));
-    let v = meta::Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.2.0", run_id: "123", run_attempt: "1" };
+    let ann_av = "<img class=\"av\" src=\"https://avatars.githubusercontent.com/u/7?s=32&v=4\" width=\"16\" height=\"16\" alt=\"\" loading=\"lazy\" decoding=\"async\">";
+    assert(actor_link(ann) == f"<a class=\"who\" href=\"https://github.com/ann\">{ann_av}<span>ann</span></a>", actor_link(ann));
+    assert(actor_link(ann, "Ann Lee") == f"<a class=\"who\" href=\"https://github.com/ann\" title=\"ann\">{ann_av}<span>Ann Lee</span></a>", actor_link(ann, "Ann Lee"));
+    let v = meta::Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.2.0", run_id: "123", run_attempt: "1", owner_id: 341800840i64 };
     let t = meta::Actor { id: 7i64, login: "ann", at: 1i64, via: v };
-    let want = "<a href=\"https://github.com/rok-lang\">rok-lang</a> via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/runs/123\" title=\"refs/tags/v0.2.0, run 123\">publish.yml</a>)";
+    let org = "<a class=\"who\" href=\"https://github.com/rok-lang\"><img class=\"av\" src=\"https://avatars.githubusercontent.com/u/341800840?s=32&v=4\" width=\"16\" height=\"16\" alt=\"\" loading=\"lazy\" decoding=\"async\"><span>rok-lang</span></a>";
+    let want = f"{org} via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/runs/123\" title=\"refs/tags/v0.2.0, run 123\">publish.yml</a>)";
     assert(actor_link(t) == want, actor_link(t));
+    // The account that started the run is not who it is shown as.
+    assert(by_link(t, "Ann Lee") == org, by_link(t, "Ann Lee"));
     assert(actor_text(t) == "rok-lang via GitHub Actions (rok-lang/json, publish.yml)", actor_text(t));
     let w = meta::Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.2.0" };
     let anon = meta::Actor { id: 0i64, login: "", at: 1i64, via: w };
-    let w2 = "<a href=\"https://github.com/rok-lang\">rok-lang</a> via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/workflows/publish.yml\" title=\"refs/tags/v0.2.0\">publish.yml</a>)";
+    let w2 = "<a class=\"who\" href=\"https://github.com/rok-lang\"><span>rok-lang</span></a> via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/workflows/publish.yml\" title=\"refs/tags/v0.2.0\">publish.yml</a>)";
     assert(actor_link(anon) == w2, actor_link(anon));
     let old = meta::Actor { id: 0i64, login: "github:acme/geom/.github/workflows/publish.yml@refs/tags/v1", at: 1i64 };
     assert(actor_link(old).contains("(trusted publishing)"), actor_link(old));
+}
+
+#[test]
+fn people() {
+    let team = meta::Person { login: "serde-rs/publish", id: 9i64, org: true };
+    let want = "<a class=\"who\" href=\"https://github.com/orgs/serde-rs/teams/publish\"><img class=\"av org\" src=\"https://avatars.githubusercontent.com/u/9?s=48&v=4\" width=\"24\" height=\"24\" alt=\"\" loading=\"lazy\" decoding=\"async\"><span>serde-rs/publish</span></a>";
+    assert(person_link(team, 24) == want, person_link(team, 24));
+    assert(avatar(0i64, 20, false).is_empty(), "no avatar without an id");
+    let page = f"<header>{LOGIN_BUTTON}</header>";
+    let menu = signed_in(page, "a<b", 5i64, "c\"1");
+    assert(!menu.contains("href=\"/login\"") && menu.contains("<details class=\"user\">") && menu.contains("a&lt;b") && menu.contains("value=\"c&quot;1\"") && menu.contains("action=\"/logout\"") && menu.contains("/u/5?s=40&v=4"), menu);
+    assert(signed_in("<p>no header</p>", "a", 5i64, "c") == "<p>no header</p>", "nothing to swap");
 }

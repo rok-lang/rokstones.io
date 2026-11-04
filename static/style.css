@@ -25,6 +25,28 @@ button{font:inherit}
 .login{display:inline-block;white-space:nowrap}
 .hdr .menu{display:none}
 
+/* the account menu (serve swaps it in for the login button) */
+.user{position:relative}
+.user summary{list-style:none;display:inline-flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap}
+.user summary::-webkit-details-marker{display:none}
+.user-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:20;min-width:200px;padding:4px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:0 8px 24px rgba(21,22,27,.12);box-sizing:border-box}
+@media not print{.dk .user-menu{box-shadow:0 8px 24px rgba(237,238,242,.12)}}
+.user-menu p{margin:0 0 4px;padding:8px 10px;color:var(--ink-2);border-bottom:1px solid var(--line)}
+.user-menu form{margin:0}
+.user-menu a,.user-menu button{display:block;width:100%;box-sizing:border-box;text-align:left;padding:8px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font-size:14px;line-height:20px;cursor:pointer;text-decoration:none}
+.user-menu a:hover,.user-menu button:hover{background:var(--bg-2)}
+
+/* people: avatars, owners, publishers */
+.av{display:inline-block;flex:none;border-radius:50%;background:var(--bg-2);vertical-align:middle}
+.av.org{border-radius:25%}
+.who{display:inline-flex;align-items:center;gap:6px;max-width:100%;vertical-align:bottom}
+.who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.people{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:24px}
+.people li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.tbl .by,.tbl time{white-space:nowrap}
+.profile{display:flex;align-items:center;gap:20px}
+.profile p{margin:0}
+
 /* search results; border-box: rokResize eases the outer height */
 .results{position:absolute;z-index:10;top:calc(100% + 6px);left:-1px;right:-1px;margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:0 8px 24px rgba(21,22,27,.12);max-height:min(430px,calc(70vh + 10px));overflow-y:auto;cursor:default;box-sizing:border-box}
 @media not print{.dk .results{box-shadow:0 8px 24px rgba(237,238,242,.12)}}
@@ -254,7 +276,7 @@ pre.sig{padding:10px 14px;background:var(--code);border:1px solid var(--line);bo
 
 /* narrow */
 @media (max-width:1000px){
-  .login .wide{display:none}
+  .login .wide,.user .wide{display:none}
   .hdr .in{gap:16px}
   .hdr .search{min-width:120px}
   .home{grid-template-columns:minmax(0,1fr);gap:48px}

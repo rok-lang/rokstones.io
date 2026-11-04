@@ -43,6 +43,8 @@ pub struct Version {
     pub license: str = "";
     /// Who published, yanked it; none when not known.
     pub by: meta::Actor | none = none;
+    /// The publishing account's GitHub display name; "": none or not known.
+    pub by_name: str = "";
     pub yanked_by: meta::Actor | none = none;
     /// Why it was yanked; `""` when not given.
     pub yank_message: str = "";
@@ -116,8 +118,8 @@ pub struct Stone {
     /// `use ..;` for the install box (apidoc::import_line); `""`: none.
     pub import: str;
     pub meta: Meta;
-    /// Who may publish it (GitHub logins); empty when not known.
-    pub owners: List<str> = List::new();
+    /// Who owns it; empty when not known.
+    pub owners: List<meta::Person> = List::new();
     /// The version a version page shows (`readme`, `api`, .. are its);
     /// `""` on the stone's own pages.
     pub at: str = "";
@@ -132,8 +134,11 @@ pub struct Stone {
 pub struct Data {
     /// By `<key>@<version>` (`index::key`).
     pub releases: Dict<str, Release>;
-    /// Owner logins by key.
-    pub owners: Dict<str, List<str>>;
+    /// Owners by key: accounts, organisations, then the owners of its
+    /// trusted publishers' repositories.
+    pub owners: Dict<str, List<meta::Person>>;
+    /// GitHub display names of accounts, by id.
+    pub names: Dict<i64, str> = Dict::new();
 }
 
 pub fn no_data() -> Data { Data { releases: Dict::new(), owners: Dict::new() } }
@@ -815,6 +820,9 @@ pub fn load(dir: str, r: Readmes, data: Data) -> Index {
             vs[i].description = rel.meta.description;
             vs[i].license = rel.meta.license;
             vs[i].by = rel.published_by;
+            if let a: meta::Actor = rel.published_by {
+                if a.via is none { vs[i].by_name = data.names.get(a.id) ?? ""; }
+            }
             if vs[i].yanked {
                 vs[i].yank_message = rel.yank_message;
                 vs[i].yanked_by = rel.yanked_by;
