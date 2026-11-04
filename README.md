@@ -10,8 +10,6 @@ Needs the Rok toolchain (`rok`, `rokc`), `git`, an index checkout, and the [web 
 ./
 |-- rok/                 # toolchain (github.com/rok-lang/rok)
 |-- rokstones.io-index/  # registry index
-|-- stones/markdown/     # markdown renderer stone (path dependency)
-|-- stones/rok-syntax/   # rok / ROKON highlighter stone (path dependency)
 `-- rokstones.io/        # this repository
 ```
 
@@ -23,12 +21,13 @@ rok run -- check          # generate; exit 1 on broken links or bad index lines
 rok run -- --demo         # generate from the sample index in fixtures/
 rok run -- --offline      # don't fetch READMEs with git (cache only)
 rok run -- --index <dir>  # use another index checkout
+rok run -- --data <dir>   # show metadata, publishers and owners from the server's db.rokon
 rok run -- serve          # serve public/ and the API (see Server)
 rok test                  # unit tests
 tests/e2e.sh              # end-to-end test of serve
 ```
 
-`fixtures/` holds a sample index (`--demo`) with more stones and edge cases than the real one, plus READMEs and source trees for some of them, for checking the site without git or network. Each stone's latest commit is fetched into `.cache/git`: its README is rendered untrusted (HTML shown as text, non-http(s)/mailto links dropped), its tree is counted for the side panel (files, size, non-blank lines of `.rok`), and its public items become the API tab (`src/apidoc.rok`). Version dates are the commit dates of the index commits that added each version's line.
+`fixtures/` holds a sample index (`--demo`) with more stones and edge cases than the real one, a sample `db.rokon` (`fixtures/data`), plus READMEs and source trees for some of them, for checking the site without git or network. Each stone's latest commit is fetched into `.cache/git`: its README is rendered untrusted (HTML shown as text, non-http(s)/mailto links dropped), its tree is counted for the side panel (files, size, non-blank lines of `.rok`), and its public items become the API tab (`src/apidoc.rok`). Version dates are the commit dates of the index commits that added each version's line.
 
 ## Web kit
 
@@ -60,7 +59,7 @@ Settings live in `.env` (copy `.env.example`; process env wins over the file):
 | `ROKSTONES_ADDR` | Listen address (default `127.0.0.1:8080`) |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app |
 | `ROKSTONES_ADMINS` | Comma-separated GitHub logins that may create publish tokens |
-| `ROKSTONES_DATA` | Directory of `db.rokon` (accounts, tokens, owners) and `sources/` |
+| `ROKSTONES_DATA` | Directory of `db.rokon` (accounts, tokens, owners, each version's metadata and publisher), `readme/<name>/<version>.md` (READMEs sent with a publish) and `sources/` |
 | `ROKSTONES_INDEX` | Index checkout the server commits to and pushes from |
 | `GITHUB_OAUTH_URL`, `GITHUB_API_URL` | Default GitHub; tests point them at a fake |
 
@@ -69,10 +68,30 @@ Login is GitHub OAuth only (`read:user`). Sessions are a 32-byte cookie stored a
 | Route | Purpose |
 |-------|---------|
 | `GET /api/v1/me` | account + publish flag |
-| `POST /api/v1/publish` | the index entry `rok publish` prints |
-| `POST /api/v1/yank` | `Yank { name, vers, undo, native }` |
+| `POST /api/v1/publish` | `Publish { entry: Stone { .. }, meta: { .. } }`: the index entry `rok publish` prints and the stone's metadata; answers `Published { name, version, file, warnings }` |
+| `POST /api/v1/yank` | `Yank { name, version, undo, native, message }`; `message` (at most 512 bytes) is the reason, cleared by an unyank |
+| `GET /api/v1/stones/<name>` | no token: owners, and each `Version { version, yanked, yank_message, deps, meta, has_readme, downloads, published_by, yanked_by, unyanked_by }`; `deps` is as in the index line |
+| `GET /api/v1/stones/<name>/<version>/readme` | no token: the README sent with that version, `text/markdown`; 404 when none was sent |
+| `GET /api/v1/native/<name>` | the same for a native package (and `/<version>/readme`) |
 
-Each write runs under one lock: reset to upstream, append (or flip `yanked`), commit, and push; a failed push resets and answers 503. Entry validation, source fetch and tree-hash checks, and the commit flow are in `src/index.rok`.
+An index line holds only what resolution needs, named as in the manifest: `name`, `version`, `deps`, `features`, `source`, `tree` (the commit's git tree hash), `yanked`, `toolchain`, `links`. A dependency is `{ name, req, kind, registry, optional, features, default_features, package, target }`: `package` is the stone it names when `name` is a rename (as Cargo's), `target` limits it to a triple or a `cfg(..)` expression, which the client evaluates.
+
+Index lines stay strict: a field the server does not know is refused, because every reader of the index must understand every line it resolves. The server is deployed before the clients that write a new field, so it learns the field first; a field older clients would misread also takes a higher `v` on the line.
+
+`meta` is forward compatible instead. The known keys are the manifest's descriptive fields (`description`, `license`, `license_file`, `authors`, `homepage`, `documentation`, `repository`, `readme`, `keywords`, `categories`, `include`, `exclude`, `publish`, `metadata`, `links`, `default_run`), what the client measured (`has_lib`, `bin_names`, `size`: packed bytes) and `readme_content` (the README text, at most 512 KiB). They are checked; any other key is kept as sent (at most 32 keys, 16 KiB), returned in the API with the rest, and named in the reply's `warnings`, never refused. The metadata is kept in `db.rokon` with the account and time of the publish, yank and unyank; the README text in its own file, shown on the stone page in place of the commit's README.
+
+`downloads` stays 0: stones are fetched from their git source, not from this server, so nothing counts them yet. The field is there for when the server serves archives.
+
+Each write runs under one lock: reset to upstream, append (or flip `yanked`), commit as the publishing account, and push; a failed push resets and answers 503. Entry and metadata validation, source fetch and tree-hash checks, and the commit flow are in `src/index.rok`.
+
+An index from before 0.2 (`vers`, `cksum`, descriptive fields in the line) moves to these names once, by hand:
+
+```bash
+rok run -- migrate-index <index checkout> <data dir>   # rewrites the lines, keeps their metadata in db.rokon
+git -C <index checkout> commit -am "Move index lines to the 0.2 field names"
+```
+
+Lines already in the new format are left alone, so a second run changes nothing.
 
 Deploy as its own user with a git identity that can push to the index, behind a TLS proxy:
 
@@ -97,7 +116,9 @@ Edit `site.rokon` (ROKON). Key fields: `title`, `tagline`, `description`, `index
 |------|----------|
 | `src/main.rok`   | Config/args, page generation, search index, link check; `serve` |
 | `src/server.rok` | `serve`: settings, `db.rokon`, GitHub login, account page, API, rebuilds |
-| `src/index.rok`  | API entry checks, index commits and pushes |
+| `src/index.rok`  | API entry and metadata checks, index commits and pushes |
+| `src/meta.rok`   | Per-version metadata and publisher records kept in `db.rokon` |
+| `src/migrate.rok` | `migrate-index`: 0.1 index lines to the 0.2 names |
 | `src/secret.rok` | SHA-256, random bytes, constant-time compare |
 | `src/stones.rok` | Reads the index, semver ordering, dependents, version dates, README and source tree fetching |
 | `src/apidoc.rok` | API tab: public items and `///` docs scanned from a stone's sources; the install box's `use` line |

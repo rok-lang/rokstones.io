@@ -1,4 +1,4 @@
-// rokstones.io-index: the registry index of rok stones (see README.md).
+// rokstones.io-index: the registry index of rok stones.
 // `api`: where `rok login` / `rok publish` / `rok yank` talk to.
 Config {
     api: "https://rokstones.io",

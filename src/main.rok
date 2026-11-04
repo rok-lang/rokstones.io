@@ -6,7 +6,10 @@
 //   rok run -- --demo            use fixtures/index and fixtures/readme
 //   rok run -- --offline         no `git fetch` for READMEs (cache only)
 //   rok run -- --index <dir>     another index checkout
+//   rok run -- --data <dir>      the server's data (db.rokon): metadata, publishers, owners
 //   rok run -- serve             serve the site and the API (see server.rok)
+//   rok run -- migrate-index <index> [<data>]
+//                                rewrite old index lines (`vers`, `cksum`) to the current names
 
 mod layout;
 mod stones;
@@ -14,6 +17,8 @@ mod secret;
 mod index;
 mod server;
 mod apidoc;
+mod meta;
+mod migrate;
 
 use rok::std::env;
 use rok::std::fs;
@@ -22,12 +27,12 @@ use rok::std::process::{Command, Stdio};
 use rok::std::rokon;
 use rok::core::crypto::HashAlgorithm;
 use rok::core::crypto::sha2::Digest;
-use rok::core::task::time::Instant;
 use layout::dir_of;
 use web::kit;
 use web::url;
 
 #[derive(Rokon)]
+#[rokon(deny_unknown_fields)]
 pub struct Site {
     pub title: str;
     pub tagline: str;
@@ -96,8 +101,7 @@ fn asset_versions() throws -> str {
         out.push_str(f"{name}={secret::hex(d.finish()[0:5])},");
     };
     for f in kit::files(kit::Mark::Rokstones) { put(f.name, f.data); }
-    for entry in fs::walk("static") {
-        let e = try entry.get();
+    try for e in fs::walk("static") {
         if !e.is_file() { continue; }
         let b = try fs::read(e.path());
         put(e.path().as_str()["static/".len():], b[0:b.len()]);
@@ -120,7 +124,7 @@ fn og_inputs(tpl: str) throws -> Digest {
     // A missing input only changes the version, so its pages fall back to
     // the site card; it must never stop the server.
     if fs::exists("og/fonts") {
-        for entry in fs::walk("og/fonts") {
+        for entry in fs::walk("og/fonts").results() {
             let e = try entry.get() catch _ { continue; };
             if e.is_file() { files.push(e.path().as_str()); }
         }
@@ -157,7 +161,7 @@ pub fn og_version(inputs: Digest, text: str) -> str {
 /// Width and height from a PNG's IHDR chunk.
 fn png_size(path: str) throws -> (i64, i64) {
     let b = try fs::read(path);
-    if b.len() < 24 { throw ValueError { msg: f"{path}: not a PNG" }; }
+    if b.len() < 24 { throw ValueError::new(f"{path}: not a PNG"); }
     let be = |k: usize| ((b[k] as i64) << 24) | ((b[k + 1] as i64) << 16) | ((b[k + 2] as i64) << 8) | (b[k + 3] as i64);
     (be(16), be(20))
 }
@@ -292,10 +296,15 @@ fn main() throws {
         try server::serve(try load_site());
         return;
     }
+    if args.len() >= 3 && args.len() <= 4 && args[1] == "migrate-index" {
+        try migrate::run(args[2], if args.len() == 4 { args[3] } else { "" });
+        return;
+    }
     let strict = false;
     let demo = false;
     let offline = false;
     let index_arg = "";
+    let data_arg = "";
     let i = 1usize;
     while i < args.len() {
         let a = args[i];
@@ -308,8 +317,11 @@ fn main() throws {
         } else if a == "--index" && i + 1 < args.len() {
             i += 1;
             index_arg = args[i];
+        } else if a == "--data" && i + 1 < args.len() {
+            i += 1;
+            data_arg = args[i];
         } else {
-            eprintln(f"unknown argument `{a}` (check, --demo, --offline, --index <dir>)");
+            eprintln(f"unknown argument `{a}` (check, --demo, --offline, --index <dir>, --data <dir>)");
             process::exit(2);
         }
         i += 1;
@@ -322,8 +334,24 @@ fn main() throws {
         eprintln(f"error: no index at {dir} (site.rokon `index`, or --demo)");
         process::exit(1);
     }
-    let readmes = stones::Readmes { cache: site.cache, fixed: if demo { "fixtures/readme" } else { "" }, fixed_src: if demo { "fixtures/src" } else { "" }, offline: offline };
-    let idx = stones::load(dir, readmes);
+    let data_dir = if demo { "fixtures/data" } else { data_arg };
+    let readmes = stones::Readmes { cache: site.cache, fixed: if demo { "fixtures/readme" } else { "" }, fixed_src: if demo { "fixtures/src" } else { "" }, offline: offline, data: data_dir };
+    let data = stones::no_data();
+    if !data_dir.is_empty() {
+        let db = try server::read_db(data_dir);
+        for r in db.releases { data.releases.insert(r.name + "@" + r.version, r); }
+        let logins: Dict<i64, str> = Dict::new();
+        for a in db.accounts { logins.insert(a.id, a.login); }
+        for o in db.owners {
+            if o.name.starts_with("native/") { continue; }
+            let ls: List<str> = List::new();
+            for id in o.accounts {
+                if let l: str = logins.get(id) { ls.push(l); }
+            }
+            data.owners.insert(o.name, ls);
+        }
+    }
+    let idx = stones::load(dir, readmes, data);
     for e in idx.errors { eprintln(f"index: {e}"); }
     let all = idx.stones;
     let have: Set<str> = Set::new();
@@ -336,7 +364,7 @@ fn main() throws {
     let mani = StrBuf::new();
     mani.push_str(f"{site.og}\t\t\t\n");
     for s in all {
-        let text = s.name + "\t" + s.latest.vers + "\t" + s.desc.replace("\t", " ").replace("\n", " ");
+        let text = s.name + "\t" + s.latest.version + "\t" + s.desc.replace("\t", " ").replace("\n", " ");
         let v = og_version(stone_card, text);
         og_v.insert(s.name, v);
         mani.push_str(v + "\t" + text + "\n");
@@ -355,10 +383,10 @@ fn main() throws {
     files.insert("stones/index.html", layout::page(site, "stones/index.html", list_title, list_body));
     for s in all {
         let out = layout::stone_out(s.name);
-        let about = if s.desc.is_empty() { f"{s.name} {s.latest.vers}, a Rok stone" } else { s.desc };
+        let about = if s.desc.is_empty() { f"{s.name} {s.latest.version}, a Rok stone" } else { s.desc };
         // Until render.mjs draws this card, link previews get the site card.
         let (og, alt) = if drawn(site, "og/" + s.name + ".png", og_v[s.name]) {
-            (site.base_url + "/og/" + s.name + ".png?v=" + og_v[s.name], f"{s.name} {s.latest.vers}: {about}")
+            (site.base_url + "/og/" + s.name + ".png?v=" + og_v[s.name], f"{s.name} {s.latest.version}: {about}")
         } else { ("", "") };
         files.insert(out, layout::page_desc(site, out, s.name, about, layout::stone_page(site, s), og, alt));
         let ao = layout::tab_out(s.name, "api");
@@ -386,7 +414,7 @@ fn main() throws {
         if k > 0 { sx.push_str(",\n"); }
         let ks: List<str> = List::new();
         for kw in s.meta.keywords { ks.push(json_str(kw)); }
-        sx.push_str(f"{{\"t\":{json_str(s.name)},\"u\":{json_str(layout::url(layout::stone_out(s.name)))},\"v\":{json_str(s.latest.vers)},\"p\":{json_str(s.desc)},\"k\":[{ks.join(",")}]}}");
+        sx.push_str(f"{{\"t\":{json_str(s.name)},\"u\":{json_str(layout::url(layout::stone_out(s.name)))},\"v\":{json_str(s.latest.version)},\"p\":{json_str(s.desc)},\"k\":[{ks.join(",")}]}}");
     }
     sx.push_str("]\n");
 
@@ -406,7 +434,7 @@ fn main() throws {
     try write(out_root, "sitemap.xml", map.to_str());
     try write(out_root, "robots.txt", f"User-agent: *\nDisallow: /me\nSitemap: {site.base_url}/sitemap.xml\n");
     try write(out_root, "search-index.json", sx.to_str());
-    try write(out_root, ".stones.rokon", rokon::to_string(rows) + "\n");
+    try write(out_root, ".stones.rokon", (try rokon::to_str(rows)) + "\n");
     let statics: Set<str> = Set::new();
     statics.insert("search-index.json");
     // Served by `serve`, not files.
@@ -418,8 +446,7 @@ fn main() throws {
         statics.insert(f.name);
     }
     for name in try kit::copy_fonts(kit::FONTS_DIR, out_root + "/fonts") { statics.insert("fonts/" + name); }
-    for entry in fs::walk("static") {
-        let e = try entry.get();
+    try for e in fs::walk("static") {
         if !e.is_file() { continue; }
         let name = e.path().as_str()["static/".len():];
         try fs::copy(e.path(), out_root + "/" + name);

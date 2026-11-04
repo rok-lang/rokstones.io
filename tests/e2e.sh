@@ -107,7 +107,6 @@ login() {
 
 start_server alice
 
-# ---- static files ----
 for _ in $(seq 100); do [ -f "$T/site/public/index.html" ] && break; sleep 0.2; done
 req GET /
 expect_code 200 "home page"
@@ -164,7 +163,6 @@ grep -q 'googleapis\|jsdelivr' "$T/site/public/index.html" && fail "third-party 
 grep -q 'href="/login"' "$T/site/public/index.html" && fail "login button while publishing is closed"
 ok "static files"
 
-# ---- logins ----
 login user
 expect_body "Publishing is not open yet" "non-admin page"
 bob_sess=$sess bob_csrf=$csrf
@@ -189,7 +187,6 @@ grep -q "$tok" "$T/b" && fail "token shown twice"
 expect_body "<td>ci</td>" "token listed"
 ok "admin token"
 
-# ---- API ----
 auth=(-H "Authorization: Bearer $tok")
 req GET /api/v1/me "${auth[@]}"
 expect_code 200 "api me"
@@ -213,66 +210,122 @@ source_repo() {
 rev=$(source_repo geom lib.rok)
 tree=$(git -C "$T/src/geom" rev-parse "HEAD^{tree}")
 app_rev=$(source_repo app main.rok)
-line="Stone { name: \"geom\", vers: \"0.1.0\", deps: [], source: Dep::git(\"https://example.invalid/geom\", rev: \"$rev\"), cksum: \"$tree\", yanked: false }"
-req POST /api/v1/publish "${auth[@]}" --data-binary "$line"
+line="Stone { name: \"geom\", version: \"0.1.0\", deps: [], source: Dep::git(\"https://example.invalid/geom\", rev: \"$rev\"), tree: \"$tree\", yanked: false, toolchain: \"0.2\" }"
+meta='{ description: "Shapes", license: "MIT", authors: ["Ann <ann@example.org>"], keywords: ["geometry"], categories: ["mathematics"], metadata: { docs: { all: true } } }'
+# publish LINE [META]: the body `rok publish` sends.
+publish() {
+    if [ $# -gt 1 ]; then
+        req POST /api/v1/publish "${auth[@]}" --data-binary "Publish { entry: $1, meta: $2 }"
+    else
+        req POST /api/v1/publish "${auth[@]}" --data-binary "Publish { entry: $1 }"
+    fi
+}
+publish "$line" "$meta"
 expect_code 200 "publish"
-expect_body 'Published { name: "geom", vers: "0.1.0", file: "ge/om/geom" }' "publish body"
+expect_body 'Published { name: "geom", version: "0.1.0", file: "ge/om/geom", warnings: \[\] }' "publish body"
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Publish geom 0.1.0" ] || fail "pushed commit"
 [ "$(git -C "$T/remote.git" log -1 --format='%an <%ae>')" = "alice <1001+alice@users.noreply.github.com>" ] || fail "commit author"
 [ "$(git -C "$T/remote.git" show HEAD:ge/om/geom)" = "$line" ] || fail "index line"
 # The rebuild draws no card (no og/node_modules): the page gets the site card.
 for _ in $(seq 50); do [ -f "$T/site/public/stones/geom.html" ] && break; sleep 0.1; done
 grep -q 'property="og:image" content="[^"]*/og.png?v=[0-9a-f]\{10\}"' "$T/site/public/stones/geom.html" || fail "undrawn card falls back to og.png"
-req POST /api/v1/publish "${auth[@]}" --data-binary "$line"
+publish "$line"
 expect_code 409 "republish"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//\"geom\"/\"ge-om\"}"
+publish "${line//\"geom\"/\"ge-om\"}"
 expect_code 200 "second name"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//\"geom\"/\"ge_om\"}"
+publish "${line//\"geom\"/\"ge_om\"}"
 expect_code 409 "spelling conflict"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//https:/http:}"
+publish "${line//https:/http:}"
 expect_code 400 "http source"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//geom/Geom}"
+publish "${line//geom/Geom}"
 expect_code 400 "name rule"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//yanked: false/yanked: false, x: 1}"
+publish "${line//yanked: false/yanked: false, x: 1}"
 expect_code 400 "unknown field"
-req POST /api/v1/publish --data-binary "$line"
+publish "${line//version:/vers:}"
+expect_code 400 "0.1 field names"
+req POST /api/v1/publish "${auth[@]}" --data-binary "$line"
+expect_code 400 "bare entry"
+publish "${line//0.1.0/0.1.1}" '{ homepage: "ftp://x" }'
+expect_code 400 "bad metadata"
+# A rename, a target-only dependency, the targets, the packed size, the
+# README text and a key this server does not know.
+line2=${line//0.1.0/0.1.2}
+dep='{ name: "shapes", req: "^0.1", kind: "normal", package: "ge-om", target: "cfg(unix)" }'
+line2=${line2//deps: \[\]/deps: [$dep]}
+publish "$line2" '{ description: "Shapes", categories: ["mathematics"], has_lib: true, bin_names: ["geom-cli"], size: 4096, readme_content: "# geom\n\nShapes, **fast**.\n", future_key: { a: 1 } }'
+expect_code 200 "publish with new metadata"
+expect_body 'warnings: \["meta: `future_key` is not known to this registry; kept as sent"\]' "unknown key warning"
+[ "$(git -C "$T/remote.git" show HEAD:ge/om/geom | tail -1)" = "$line2" ] || fail "rename line"
+publish "${line2//cfg(unix)/cfg(unix}"
+expect_code 400 "bad target"
+publish "${line//0.1.0/0.1.3}" "{ readme_content: \"$(head -c 524289 /dev/zero | tr '\0' a)\" }"
+expect_code 400 "readme cap"
+req POST /api/v1/publish --data-binary "Publish { entry: $line }"
 expect_code 401 "no token"
 app_line=${line//example.invalid\/geom/example.invalid\/app}
-req POST /api/v1/publish "${auth[@]}" --data-binary "${app_line//$rev/$app_rev}"
+publish "${app_line//$rev/$app_rev}"
 expect_code 400 "not a library"
 expect_body 'not a library package (no src/lib.rok)' "not a library body"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//$rev/$(printf 'cd%.0s' $(seq 20))}"
+publish "${line//$rev/$(printf 'cd%.0s' $(seq 20))}"
 expect_code 400 "unfetchable source"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//cksum: \"$tree\"/cksum: \"$rev\"}"
-expect_code 400 "cksum mismatch"
-expect_body "cksum $rev is not the tree hash of commit $rev ($tree)" "cksum mismatch body"
+publish "${line//tree: \"$tree\"/tree: \"$rev\"}"
+expect_code 400 "tree mismatch"
+expect_body "\`tree\` $rev is not the tree hash of commit $rev ($tree)" "tree mismatch body"
 h=$(printf 'ab%.0s' $(seq 32))
-native="Native { name: \"zlib\", vers: \"1.3.1\", deps: {}, targets: { \"x86_64-unknown-linux-gnu\": Artifact { url: \"https://example.invalid/z.tar.gz\", sha256: \"$h\", links: { \"z\": \"static\" }, runtime: [] } }, yanked: false, license: \"Zlib\" }"
-req POST /api/v1/publish "${auth[@]}" --data-binary "$native"
+native="Native { name: \"zlib\", version: \"1.3.1\", deps: {}, targets: { \"x86_64-unknown-linux-gnu\": Artifact { url: \"https://example.invalid/z.tar.gz\", sha256: \"$h\", links: { \"z\": \"static\" }, runtime: [] } }, yanked: false }"
+publish "$native" '{ license: "Zlib" }'
 expect_code 200 "publish native"
 [ "$(git -C "$T/remote.git" show HEAD:native/zl/ib/zlib)" = "$native" ] || fail "native line"
 ok "publish"
 
-req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", vers: "0.1.0" }'
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0", message: "wrong areas" }'
 expect_code 200 "yank"
-expect_body 'Yanked { name: "geom", vers: "0.1.0", yanked: true }' "yank body"
+expect_body 'Yanked { name: "geom", version: "0.1.0", yanked: true }' "yank body"
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Yank geom 0.1.0" ] || fail "yank commit"
 git -C "$T/remote.git" show HEAD:ge/om/geom | grep -q 'yanked: true' || fail "yanked line"
-req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", vers: "0.1.0", undo: true, native: false }'
+req GET /api/v1/stones/geom
+expect_body 'version: "0.1.0", yanked: true, yank_message: "wrong areas"' "yank message"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0", undo: true, message: "x" }'
+expect_code 400 "unyank with a message"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0", undo: true, native: false }'
 expect_code 200 "unyank"
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Unyank geom 0.1.0" ] || fail "unyank commit"
-[ "$(git -C "$T/remote.git" show HEAD:ge/om/geom)" = "$line" ] || fail "unyanked line"
-req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "zlib", vers: "1.3.1", native: true }'
+[ "$(git -C "$T/remote.git" show HEAD:ge/om/geom | head -1)" = "$line" ] || fail "unyanked line"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "zlib", version: "1.3.1", native: true }'
 [ "$(git -C "$T/remote.git" log -1 --format=%s)" = "Yank native zlib 1.3.1" ] || fail "native yank commit"
-req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", vers: "9.9.9" }'
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "9.9.9" }'
 expect_code 404 "yank unknown"
 ok "yank"
+
+# Metadata and who did what: the public API, no token.
+req GET /api/v1/stones/geom
+expect_code 200 "stone api"
+expect_body 'Stone { name: "geom", native: false, owners: \[{ id: 1001, login: "alice" }\]' "stone api owners"
+expect_body 'Version { version: "0.1.0", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes", license: "MIT", authors: \["Ann <ann@example.org>"\], keywords: \["geometry"\], categories: \["mathematics"\], metadata: { docs: { all: true } } }, has_readme: false, downloads: 0, published_by: Actor { id: 1001, login: "alice", at: [0-9]*' "stone api version"
+expect_body 'Version { version: "0.1.2", yanked: false, yank_message: none, deps: \[{ name: "shapes", req: "^0.1", kind: "normal", package: "ge-om", target: "cfg(unix)" }\], meta: { description: "Shapes", categories: \["mathematics"\], has_lib: true, bin_names: \["geom-cli"\], size: 4096, future_key: { a: 1 } }, has_readme: true, downloads: 0,' "stone api new fields"
+expect_body 'yanked_by: Actor { id: 1001, login: "alice", at: [0-9]* }, unyanked_by: Actor { id: 1001, login: "alice"' "stone api yank record"
+req GET /api/v1/stones/geom/0.1.2/readme
+expect_code 200 "readme api"
+[ "$(header content-type)" = "text/markdown; charset=utf-8" ] || fail "readme type: $(header content-type)"
+[ "$(cat "$T/b")" = "$(printf '# geom\n\nShapes, **fast**.')" ] || fail "readme text: $(cat "$T/b")"
+req GET /api/v1/stones/geom/0.1.0/readme
+expect_code 404 "no readme"
+req GET /api/v1/stones/geom/0.1.2/x
+expect_code 404 "unknown sub-route"
+req GET /api/v1/native/zlib
+expect_code 200 "native api"
+expect_body 'meta: { license: "Zlib" }' "native api meta"
+req GET /api/v1/stones/nope
+expect_code 404 "unknown stone api"
+req POST /api/v1/stones/geom "${auth[@]}"
+expect_code 405 "stone api method"
+ok "metadata api"
 
 # A rejected push: 503, and the checkout back at the remote's state.
 printf '#!/bin/sh\nexit 1\n' > "$T/remote.git/hooks/pre-receive"
 chmod +x "$T/remote.git/hooks/pre-receive"
 before=$(git -C "$T/remote.git" rev-parse HEAD)
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//0.1.0/0.2.0}"
+publish "${line//0.1.0/0.2.0}"
 expect_code 503 "push refused"
 [ "$(git -C "$T/index" rev-parse HEAD)" = "$before" ] || fail "checkout not reset"
 [ -z "$(git -C "$T/index" status --porcelain)" ] || fail "checkout dirty"
@@ -283,6 +336,12 @@ ok "push failure"
 for _ in $(seq 100); do [ -f "$T/site/public/stones/geom.html" ] && break; sleep 0.2; done
 req GET /stones/geom
 expect_code 200 "stone page after publish"
+expect_body '<dt>Owner</dt><dd><a href="https://github.com/alice">alice</a></dd>' "owners on the page"
+expect_body 'by <a href="https://github.com/alice">alice</a>' "publisher on the page"
+expect_body '<dt>Category</dt><dd>mathematics</dd>' "categories on the page"
+expect_body '<p>Shapes, <strong>fast</strong>.</p>' "published README rendered"
+req GET /stones/geom/dependencies
+expect_body 'href="/stones/ge-om">ge-om</a> <span class="muted">as</span> <span class="mono">shapes</span> <span class="tag" title="only for this target">cfg(unix)</span>' "rename and target on the page"
 req GET /stones/geom/0.1.0
 expect_code 200 "version page"
 expect_body 'rel="canonical" href="[^"]*/stones/geom/0.1.0"' "version canonical"
@@ -311,7 +370,7 @@ kill "$server"; wait "$server" 2>/dev/null || true
 start_server bob
 req GET /api/v1/me "${auth[@]}"
 expect_body 'publish: false' "demoted"
-req POST /api/v1/publish "${auth[@]}" --data-binary "${line//0.1.0/0.3.0}"
+publish "${line//0.1.0/0.3.0}"
 expect_code 403 "demoted publish"
 kill "$server"; wait "$server" 2>/dev/null || true
 start_server alice

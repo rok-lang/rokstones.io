@@ -14,7 +14,7 @@ pub enum Value {
     Float(f64),
     Str(str),
     Array(List<Value>),
-    Object(OrderedDict<str, Value>),
+    Object(Dict<str, Value>),
 }
 
 impl Value {
@@ -35,7 +35,7 @@ pub struct JsonError {
     pub col: usize;
 }
 
-/// A rok value as JSON.
+/// A Rok value as JSON.
 pub trait ToJson {
     fn to_json(self) -> Value;
 }

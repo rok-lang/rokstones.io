@@ -1,0 +1,129 @@
+// One-shot move of an index checkout to the current line format: `vers` ->
+// `version`, `cksum` -> `tree`, and the descriptive fields
+// (`description`, `license`, `repository`) out of the lines into the
+// server's data file. Lines already in the new format are left as they
+// are, so a second run changes nothing. It writes files only; review
+// and commit the index by hand.
+//
+//   rok run -- migrate-index <index checkout> [<data dir>]
+
+use rok::std::fs;
+use rok::std::rokon;
+use rok::std::rokon::Value;
+use pkg::index;
+use pkg::server;
+
+/// Line fields that leave the index for the data file.
+const MOVED: [str; 3] = ["description", "license", "repository"];
+
+/// Metadata taken out of one line.
+pub struct Moved {
+    /// `index::key`, `native/` prefixed for native packages.
+    pub key: str;
+    pub version: str;
+    pub fields: Dict<str, str>;
+}
+
+/// `line` in the current format, and what left it; the line unchanged when it
+/// is not an entry.
+pub fn line(text: str, native: bool) throws -> (str, Moved | none) {
+    let v = try rokon::parse(text);
+    let kind = "";
+    let fields: Dict<str, Value> = Dict::new();
+    if let Value::Struct { name: n, fields: f } = v {
+        kind = n ?? "";
+        fields = f;
+    }
+    if kind != "Stone" && kind != "Native" { throw ValueError::new(f"not a `Stone {{ .. }}` or `Native {{ .. }}`: `{kind}`"); }
+    let out: Dict<str, Value> = Dict::new();
+    let moved: Dict<str, str> = Dict::new();
+    for (k, x) in fields {
+        let k2 = if k == "vers" { "version" } else if k == "cksum" && kind == "Stone" { "tree" } else { k };
+        if MOVED.contains(k2) {
+            if let Value::Str(s) = x { moved.insert(k2, s); }
+            continue;
+        }
+        if out.contains_key(k2) { throw ValueError::new(f"both `{k}` and `{k2}`"); }
+        out.insert(k2, x);
+    }
+    let name = if let Value::Str(s) = out.get("name") ?? Value::None { s } else { throw ValueError::new("no `name`"); };
+    let version = if let Value::Str(s) = out.get("version") ?? Value::None { s } else { throw ValueError::new("no `version`"); };
+    let m: Moved | none = none;
+    if !moved.is_empty() {
+        m = Moved { key: (if native { "native/" } else { "" }) + index::key(name), version: version, fields: moved };
+    }
+    (try rokon::to_str_flat(Value::Struct { name: kind, fields: out }), m)
+}
+
+pub fn run(dir: str, data: str) throws {
+    let root = dir.strip_suffix("/") ?? dir;
+    if !fs::exists(root + "/config.rokon") { throw ValueError::new(f"{root} is not an index (no config.rokon)"); }
+    // Everything is read and converted before anything is written.
+    let files: List<(str, str)> = List::new();
+    let moved: List<Moved> = List::new();
+    let lines = 0usize;
+    try for e in fs::walk(root) {
+        if !e.is_file() { continue; }
+        let rel = e.path().as_str()[root.len() + 1:];
+        if !rel.contains("/") || rel.starts_with(".") { continue; }
+        let native = rel.starts_with("native/");
+        let text = try fs::read_to_str(e.path());
+        let out = StrBuf::new();
+        let n = 0usize;
+        for l in text.split("\n") {
+            n += 1;
+            if l.trim().is_empty() {
+                if !l.is_empty() { out.push_str(l + "\n"); }
+                continue;
+            }
+            let (nl, m) = try line(l, native) catch x { throw ValueError::new(f"{rel}:{n}: {x}"); };
+            if let x: Moved = m { moved.push(x); }
+            if nl != l { lines += 1; }
+            out.push_str(nl + "\n");
+        }
+        if out.to_str() != text { files.push((e.path().as_str(), out.to_str())); }
+    }
+    if !data.is_empty() && !moved.is_empty() {
+        let db = try server::read_db(data);
+        for m in moved {
+            let i = server::release_at(db, m.key, m.version);
+            for (k, v) in m.fields {
+                if k == "description" && db.releases[i].meta.description.is_empty() { db.releases[i].meta.description = v; }
+                if k == "license" && db.releases[i].meta.license.is_empty() { db.releases[i].meta.license = v; }
+                if k == "repository" && db.releases[i].meta.repository.is_empty() { db.releases[i].meta.repository = v; }
+            }
+        }
+        try fs::create_dir_all(data);
+        try server::write_db(data, db);
+    } else if !moved.is_empty() {
+        // No data file to keep them in: say what is dropped.
+        for m in moved {
+            for (k, v) in m.fields { println(f"dropped {m.key} {m.version} {k}: {v:?}"); }
+        }
+    }
+    for (p, t) in files { try fs::write(p, t); }
+    let kept = if data.is_empty() { "" } else { f", metadata of {moved.len()} versions in {data}/db.rokon" };
+    println(f"{root}: {lines} lines in {files.len()} files rewritten{kept}");
+    if !files.is_empty() { println(f"review, then: git -C {root} commit -am \"Move index lines to the 0.2 field names\""); }
+}
+
+#[cfg(test)]
+fn expect(ok: bool, what: str) {
+    if !ok { panic(what); }
+}
+
+#[test]
+fn lines() {
+    let old = "Stone { name: \"Ge-om\", vers: \"0.1.0\", deps: [{ name: \"num\", req: \"^1.0\", kind: \"normal\" }], source: Dep::git(\"https://x/geom\", rev: \"ab\"), cksum: \"cd\", yanked: false, description: \"Shapes\", license: \"MIT\" }";
+    let (l, m) = try line(old, false) catch e { panic(f"{e}"); };
+    expect(l == "Stone { name: \"Ge-om\", version: \"0.1.0\", deps: [{ name: \"num\", req: \"^1.0\", kind: \"normal\" }], source: Dep::git(\"https://x/geom\", rev: \"ab\"), tree: \"cd\", yanked: false }", l);
+    let x = m ?? { panic("nothing moved"); };
+    expect(x.key == "ge_om" && x.version == "0.1.0" && x.fields["license"] == "MIT" && x.fields.len() == 2, "moved");
+    let (again, none_moved) = try line(l, false) catch e { panic(f"{e}"); };
+    expect(again == l && none_moved is none, "second run");
+    let (n, nm) = try line("Native { name: \"zlib\", vers: \"1.3.1\", deps: {}, targets: {}, yanked: false, license: \"Zlib\" }", true) catch e { panic(f"{e}"); };
+    expect(n == "Native { name: \"zlib\", version: \"1.3.1\", deps: {}, targets: {}, yanked: false }", n);
+    expect((nm ?? { panic("native"); }).key == "native/zlib", "native key");
+    let both = try { _ = line("Stone { name: \"a\", vers: \"1.0.0\", version: \"1.0.0\" }", false); "" } catch e { f"{e}" };
+    expect(both.contains("both"), both);
+}

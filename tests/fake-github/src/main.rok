@@ -7,11 +7,11 @@
 use rok::std::env;
 use rok::std::net;
 use rok::std::net::TcpStream;
-use rok::std::io::byte_buf;
 
 fn answer(s: TcpStream, secret: str) throws {
     let data: List<u8> = List::new();
-    let buf = byte_buf(4096);
+    let buf: List<u8> = List::with_capacity(4096);
+    for _ in 0..4096 { buf.push(0u8); }
     let text = "";
     loop {
         let k = try s.read(buf);
@@ -48,16 +48,15 @@ fn answer(s: TcpStream, secret: str) throws {
             out = "{\"login\":\"Bob\",\"id\":1002}";
         }
     }
-    try s.write_str(f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {out.len()}\r\nConnection: close\r\n\r\n{out}");
+    try s.write_all(f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {out.len()}\r\nConnection: close\r\n\r\n{out}");
 }
 
 fn main() throws {
     let args = env::args();
     using l = try net::tcp_listen(args[1]) {
-        for c in l.incoming() {
-            let s = try c.get();
+        try for s in l.incoming() {
             try answer(s, args[2]) catch e { eprintln(f"fake github: {e}"); };
-            s.close();
+            try s.close() catch _ {};
         }
     }
 }

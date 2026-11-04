@@ -1,0 +1,56 @@
+// Sample server data for `--demo`: accounts, owners, and what each
+// version was published with and by whom.
+Db {
+    accounts: [
+        Account { id: 1001, login: "alice", created: 1767225600 },
+        Account { id: 1002, login: "bob", created: 1767225600 },
+    ],
+    sessions: [],
+    tokens: [],
+    owners: [
+        Owner { name: "geom", accounts: [1001, 1002] },
+        Owner { name: "json", accounts: [1001] },
+        Owner { name: "old", accounts: [1002] },
+    ],
+    releases: [
+        Release {
+            name: "http",
+            version: "0.1.0",
+            meta: Meta { description: "HTTP/1.1 and HTTP/2 client and server", license: "MIT" },
+        },
+        Release {
+            name: "json",
+            version: "0.5.0",
+            meta: Meta {
+                description: "JSON parser and writer",
+                license: "MIT OR Apache-2.0",
+                authors: ["Alice Kim <alice@example.org>"],
+                repository: "https://github.com/rokstones-demo/json",
+                keywords: ["json", "parser", "serialization"],
+                categories: ["encoding", "parsing"],
+            },
+            published_by: Actor { id: 1001, login: "alice", at: 1767312000 },
+        },
+        Release {
+            name: "geom",
+            version: "0.3.1",
+            meta: Meta {
+                description: "2D geometry: points, vectors, shapes and their intersections",
+                license: "MIT",
+                license_file: "LICENSE",
+                keywords: ["geometry", "math"],
+                categories: ["mathematics"],
+                homepage: "https://example.org/geom",
+                metadata: { docs: { all_features: true } },
+            },
+            published_by: Actor { id: 1002, login: "bob", at: 1767398400 },
+        },
+        Release {
+            name: "old",
+            version: "0.1.0",
+            meta: Meta { description: "An early stone, yanked" },
+            published_by: Actor { id: 1002, login: "bob", at: 1767225600 },
+            yanked_by: Actor { id: 1002, login: "bob", at: 1767312000 },
+        },
+    ],
+}
