@@ -359,7 +359,7 @@ fn stone_row(s: Row, note: str, terms: List<str> = List::new(), why: str = "") -
     let desc = if s.desc.is_empty() { "<span class=\"desc none\">No description</span>" } else { f"<span class=\"desc\">{marked(s.desc, terms)}</span>" };
     let gone = if s.yanked { " <span class=\"tag\">yanked</span>" } else { "" };
     let matched = if why.is_empty() { "" } else { f"<span class=\"why\">matches {why}</span>" };
-    let when = if !note.is_empty() { f"<span class=\"when\">{note}</span>" } else if s.date.is_empty() { "<span class=\"when\"></span>" } else { f"<time class=\"when\" datetime=\"{esc(s.date)}\">{esc(s.date)}</time>" };
+    let when = if !note.is_empty() { f"<span class=\"when\">{note}</span>" } else if s.date.is_empty() { "<span class=\"when\"></span>" } else { when_tag(s.date, "when", true) };
     f"<li{if s.yanked { " class=\"yanked\"" } else { "" }}><a class=\"st\" href=\"{href}\">{glyph(s.name, 34, "gl")}<span class=\"main\"><span class=\"nl\"><b class=\"nm\">{marked(s.name, terms)}</b>{gone}{matched}</span>{desc}</span><span class=\"ver\">{esc(s.version)}</span>{when}</a></li>"
 }
 
@@ -551,7 +551,7 @@ fn stone_head(s: Stone, tab: str) -> str {
     let l = s.latest;
     // One plain line for narrow screens, where the side panel comes last.
     let sum: List<str> = List::new();
-    if !l.date.is_empty() { sum.push(f"published <time datetime=\"{esc(l.date)}\">{esc(l.date)}</time>"); }
+    if !l.date.is_empty() { sum.push(f"published {when_tag(l.date, "", false)}"); }
     if !s.meta.license.is_empty() { sum.push(esc(s.meta.license)); }
     sum.push(plural(count_deps(l, "normal"), "dependency", "dependencies"));
     let about = if s.desc.is_empty() { "" } else { f"<p class=\"t-lead\">{esc(s.desc)}</p>" };
@@ -647,6 +647,14 @@ pub fn login_link(login: str) -> str {
     f"<a href=\"https://github.com/{esc(http::pct_encode(login))}\">{esc(login)}</a>"
 }
 
+/// A publish time `YYYY-MM-DDTHH:MMZ` as `<time>`: the date and the 24-hour
+/// UTC time, or the date alone when `short`.
+fn when_tag(iso: str, class: str, short: bool) -> str {
+    let c = if class.is_empty() { "" } else { f" class=\"{class}\"" };
+    let text = if short || iso.len() < 16 { iso[:iso.len().min(10)] } else { f"{iso[:10]} {iso[11:16]} UTC" };
+    f"<time{c} datetime=\"{esc(iso)}\">{esc(text)}</time>"
+}
+
 /// Who did it, after "by": a GitHub user, or for a trusted publish the
 /// user who triggered the run, "via GitHub Actions", the repository and
 /// the run; "" when not known.
@@ -681,7 +689,7 @@ fn side(site: Site, s: Stone) -> str {
     let kv = StrBuf::new();
     let pb = actor_link(l.by);
     if !l.date.is_empty() || !pb.is_empty() {
-        let when = if l.date.is_empty() { "" } else { f"<time datetime=\"{esc(l.date)}\">{esc(l.date)}</time>" };
+        let when = if l.date.is_empty() { "" } else { when_tag(l.date, "", false) };
         let who = if pb.is_empty() { "" } else { f"{if when.is_empty() { "by" } else { " by" }} {pb}" };
         kv.push_str(f"<dt>Published</dt><dd>{when}{who}</dd>");
     }
@@ -734,7 +742,7 @@ fn side(site: Site, s: Stone) -> str {
         k += 1;
         let mark = if v.version == (if s.at.is_empty() { l.version } else { s.top }) && !v.yanked { "<span class=\"dot\" title=\"latest\"></span>" } else { "<span class=\"dot off\"></span>" };
         let tag = if v.yanked { "<span class=\"tag\">yanked</span>" } else if stones::is_pre(v.version) { "<span class=\"tag\">pre-release</span>" } else { "" };
-        let when = if v.date.is_empty() { "" } else { f"<time class=\"c\" datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
+        let when = if v.date.is_empty() { "" } else { when_tag(v.date, "c", false) };
         let cur = if v.version == s.at { " aria-current=\"page\"" } else { "" };
         vb.push_str(f"<li{if v.yanked { " class=\"yanked\"" } else { "" }}>{mark}<a class=\"v\" href=\"{esc(url(ver_out(s.name, v.version)))}\"{cur}>{esc(v.version)}</a>{tag}{when}</li>");
     }
@@ -821,7 +829,7 @@ pub fn versions_page(site: Site, s: Stone) -> str {
             tags.push_str(f"<span class=\"tag\"{by}>yanked</span>");
         }
         if stones::is_pre(v.version) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
-        let when = if v.date.is_empty() { "<span class=\"muted\">unknown</span>" } else { f"<time datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
+        let when = if v.date.is_empty() { "<span class=\"muted\">unknown</span>" } else { when_tag(v.date, "", false) };
         let pb = actor_link(v.by);
         let who = if pb.is_empty() { "<span class=\"muted\">unknown</span>" } else { pb };
         b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><a class=\"v\" href=\"{page}\">{esc(v.version)}</a>{tags.to_str()}</td><td>{when}</td><td>{who}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.tree)}\">{short(v.tree)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
