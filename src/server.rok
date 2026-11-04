@@ -608,7 +608,15 @@ fn api_route(cfg: Cfg, r: Request) -> Resp {
 
 fn actor_value(a: Actor | none) -> Value {
     match a {
-        x: Actor => rokon::to_value(x),
+        x: Actor => {
+            let v = rokon::to_value(x);
+            // An account's record keeps its old shape.
+            if let Value::Struct { name: n, fields } = v {
+                if fields.get("via") == Value::None { fields.remove("via"); }
+                return Value::Struct { name: n, fields: fields };
+            }
+            v
+        },
         none => Value::None,
     }
 }
@@ -677,6 +685,19 @@ struct Auth {
     login: str;
     /// The index commit's author.
     who: str;
+    /// Recorded as who published or yanked.
+    actor: Actor;
+}
+
+fn nobody_did() -> Actor { Actor { id: 0i64, login: "", at: 0i64 } }
+
+/// Who an exchanged token acts for: the user who triggered the run, and
+/// the run. A token with no run on record names its workflow instead.
+fn trusted_actor(t: TrustToken) -> Actor {
+    match t.via {
+        v: meta::Via => Actor { id: t.actor_id, login: t.actor, at: 0i64, via: v },
+        none => Actor { id: 0i64, login: t.publisher, at: 0i64 },
+    }
 }
 
 fn may(auth: Auth, db: Db, k: str, in_index: bool) -> bool {
@@ -819,6 +840,7 @@ fn exchange(cfg: Cfg, db: Db, body: str) throws (ApiError) -> Resp {
     }
     let tok = "rkt_" + try secret::random_hex(32) catch e { throw index::err(500, f"{e}"); };
     let exp = try (c.get("exp") ?? "").parse::<i64>() catch _ { now };
+    let (actor, actor_id) = trust::actor_of(c);
     db.trust_tokens.push(TrustToken {
         hash: secret::sha256_hex(tok),
         stones: keys,
@@ -828,6 +850,9 @@ fn exchange(cfg: Cfg, db: Db, body: str) throws (ApiError) -> Resp {
         created: now,
         expires: now + trust::TOKEN_SECS,
         jwt_expires: exp,
+        actor: actor,
+        actor_id: actor_id,
+        via: trust::via_of(c),
     });
     try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
     eprintln(f"trusted publishing: github:{wref} for {keys.join(", ")}");
@@ -898,17 +923,17 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     if r.path == "/api/v1/trusted-publishing/token" { return try exchange(cfg, db, r.body); }
     let presented = (r.header("authorization").strip_prefix("Bearer ") ?? "").trim();
     let no_account = Account { id: 0i64, login: "", created: 0i64 };
-    let auth = Auth { account: no_account, admin: false, scope: none, login: "", who: "" };
+    let auth = Auth { account: no_account, admin: false, scope: none, login: "", who: "", actor: nobody_did() };
     if presented.starts_with("rkt_") {
         let t = trust::token_of(db.trust_tokens, presented, now_secs()) ?? {
             throw index::err(401, "the trusted publishing token expired or is not valid; exchange a new OIDC token");
         };
-        auth = Auth { account: no_account, admin: false, scope: t.stones, login: t.publisher, who: f"{t.repository} <index@rokstones.io>" };
+        auth = Auth { account: no_account, admin: false, scope: t.stones, login: t.publisher, who: f"{t.repository} <index@rokstones.io>", actor: trusted_actor(t) };
     } else {
         let tok = token_of(db, presented) ?? Token { id: "", name: "", account: 0i64, hash: "", created: 0i64, last_used: 0i64 };
         if tok.id.is_empty() { throw index::err(401, "a valid token is required (Authorization: Bearer rks_..)"); }
         let a = account(db, tok.account) ?? no_account;
-        auth = Auth { account: a, admin: is_admin(cfg, a.login), scope: none, login: a.login, who: f"{a.login} <{a.id}+{a.login}@users.noreply.github.com>" };
+        auth = Auth { account: a, admin: is_admin(cfg, a.login), scope: none, login: a.login, who: f"{a.login} <{a.id}+{a.login}@users.noreply.github.com>", actor: Actor { id: a.id, login: a.login, at: 0i64 } };
         tok.last_used = now_secs();
         try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
     }
@@ -940,7 +965,8 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     }
     if !trusted && !auth.admin { throw index::err(403, "Publishing is not open yet"); }
     try index::sync(cfg.index);
-    let by = Actor { id: auth.account.id, login: auth.login, at: now_secs() };
+    let by = auth.actor;
+    by.at = now_secs();
     if r.path == "/api/v1/publish" {
         let p = try index::parse_publish(r.body);
         let e = p.entry;
@@ -1326,9 +1352,9 @@ fn ownership_and_tokens() {
 fn trusted_scope() {
     let db = Db { accounts: List::new(), sessions: List::new(), tokens: List::new(), owners: [Owner { name: "geom", accounts: [5i64] }] };
     let nobody = Account { id: 0i64, login: "", created: 0i64 };
-    let t = Auth { account: nobody, admin: false, scope: ["geom", "ge_om"], login: "github:x", who: "" };
+    let t = Auth { account: nobody, admin: false, scope: ["geom", "ge_om"], login: "github:x", who: "", actor: nobody_did() };
     expect(may(t, db, "geom", true) && may(t, db, "ge_om", false) && !may(t, db, "json", true) && !may(t, db, "native/geom", true), "scope");
-    let owner = Auth { account: Account { id: 5i64, login: "o", created: 0i64 }, admin: false, scope: none, login: "o", who: "" };
+    let owner = Auth { account: Account { id: 5i64, login: "o", created: 0i64 }, admin: false, scope: none, login: "o", who: "", actor: nobody_did() };
     expect(may(owner, db, "geom", true) && !may(owner, db, "json", true), "account");
     expect(may_manage(db, "geom", 5i64, false) && !may_manage(db, "geom", 6i64, false), "owners manage");
     expect(!may_manage(db, "markdown", 5i64, false) && may_manage(db, "markdown", 6i64, true), "unowned names are the admins'");

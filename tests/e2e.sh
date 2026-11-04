@@ -337,7 +337,7 @@ ok "metadata api"
 now=$(date +%s)
 # claims REPO WORKFLOW: what GitHub puts in a job's OIDC token.
 claims() {
-    printf '{"jti":"%s","sub":"repo:%s:ref:refs/tags/v1","aud":"%s","iss":"http://127.0.0.1:%s/oidc","repository":"%s","repository_owner_id":"4242","workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","job_workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","iat":%s,"nbf":%s,"exp":%s}' \
+    printf '{"jti":"%s","sub":"repo:%s:ref:refs/tags/v1","aud":"%s","iss":"http://127.0.0.1:%s/oidc","repository":"%s","repository_owner_id":"4242","ref":"refs/tags/v1","actor":"carol","actor_id":"3003","run_id":"777","run_attempt":"1","workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","job_workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","iat":%s,"nbf":%s,"exp":%s}' \
         "$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')" "$1" "${AUD:-rokstones.test}" "$gh_port" "$1" "$1" "$2" "$1" "$2" "$now" "$now" "$((now + 300))"
 }
 mint() { curl -s --data-binary "$1" "http://127.0.0.1:$gh_port/_mint"; }
@@ -413,7 +413,8 @@ expect_code 200 "trusted yank"
 req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.0.9", undo: true }'
 expect_code 200 "trusted unyank"
 req GET /api/v1/stones/geom
-expect_body 'version: "0.0.9", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes" }, has_readme: false, downloads: 0, published_by: Actor { id: 0, login: "github:acme/geom/.github/workflows/publish.yml@refs/tags/v1"' "trusted publisher recorded"
+expect_body 'version: "0.0.9", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes" }, has_readme: false, downloads: 0, published_by: Actor { id: 3003, login: "carol", at: [0-9]*, via: Via { repository: "acme/geom", workflow: "publish.yml", ref: "refs/tags/v1", run_id: "777", run_attempt: "1" } }' "trusted publisher recorded"
+expect_body 'yanked_by: Actor { id: 3003, login: "carol", at: [0-9]*, via: Via { repository: "acme/geom"' "trusted yank recorded"
 
 # A version committed with `rok publish --index-dir` has no metadata:
 # publishing it again from the same tree fills it in.
@@ -480,10 +481,12 @@ expect_body '<dt>Owner</dt><dd><a href="https://github.com/alice">alice</a></dd>
 expect_body 'by <a href="https://github.com/alice">alice</a>' "publisher on the page"
 for _ in $(seq 50); do
     req GET /stones/geom/versions
-    grep -q '(trusted publishing)' "$T/b" && break
+    grep -q 'via GitHub Actions' "$T/b" && break
     sleep 0.2
 done
-expect_body '<a href="https://github.com/acme/geom/actions/workflows/publish.yml" title="acme/geom/.github/workflows/publish.yml@refs/tags/v1">acme/geom</a> <span class="muted">(trusted publishing)</span>' "trusted publisher on the versions page"
+expect_body '<a href="https://github.com/carol">carol</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777" title="refs/tags/v1, run 777">publish.yml</a>)' "trusted publisher on the versions page"
+req GET /stones/geom/0.0.9
+expect_body '<dt>Published</dt><dd><time datetime="[0-9-]*">[0-9-]*</time> by <a href="https://github.com/carol">carol</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777"' "trusted publisher on the version page"
 req GET /stones/geom
 expect_body '<dt>Category</dt><dd>mathematics</dd>' "categories on the page"
 expect_body '<p>Shapes, <strong>fast</strong>.</p>' "published README rendered"
