@@ -58,14 +58,15 @@ Settings live in `.env` (copy `.env.example`; process env wins over the file):
 | `ROKSTONES_URL` | Public base URL; OAuth callback is `{URL}/auth/github/callback` |
 | `ROKSTONES_ADDR` | Listen address (default `127.0.0.1:8080`) |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app |
-| `ROKSTONES_ADMINS` | Comma-separated GitHub logins that may create publish tokens |
+| `ROKSTONES_ADMINS` | Comma-separated GitHub logins that may create publish tokens, add trusted publishers, publish and yank |
+| `ROKSTONES_OPEN_PUBLISHING` | `1` lets every account do what the admins do with their own stones; unset (default), other accounts only log in and their tokens authorize nothing |
 | `ROKSTONES_DATA` | Directory of `db.rokon` (accounts, tokens, owners, each version's metadata and publisher), `readme/<name>/<version>.md` (READMEs sent with a publish) and `sources/` |
 | `ROKSTONES_INDEX` | Index checkout the server commits to and pushes from |
 | `ROKSTONES_TRUSTED` | Optional bootstrap file of trusted publishers (see Trusted publishing) |
 | `ROKSTONES_AUDIENCE` | The `aud` an OIDC token must carry (default: the host of `ROKSTONES_URL`) |
 | `GITHUB_OAUTH_URL`, `GITHUB_API_URL`, `GITHUB_OIDC_ISSUER` | Default GitHub; tests point them at a fake |
 
-Login is GitHub OAuth only (`read:user`). Sessions are a 32-byte cookie stored as SHA-256. Publish tokens (`rks_` + 64 hex) are admin-only, stored as SHA-256 and compared in constant time. The ROKON API takes `Authorization: Bearer rks_..`:
+Login is GitHub OAuth only (`read:user`). Sessions are a 32-byte cookie stored as SHA-256. Publish tokens (`rks_` + 64 hex) are admin-only until `ROKSTONES_OPEN_PUBLISHING` is set, stored as SHA-256 and compared in constant time. The ROKON API takes `Authorization: Bearer rks_..`:
 
 | Route | Purpose |
 |-------|---------|
@@ -88,7 +89,7 @@ Index lines stay strict: a field the server does not know is refused, because ev
 
 ### Trusted publishing
 
-A stone's owners (or the admins) name GitHub Actions workflows that may publish it: repository `owner/repo`, workflow file, and optionally an environment, on the account page or through the API. Adding one looks up the repository's owner id on GitHub, so a deleted and re-registered owner name does not match. A stone with no owner on record (not published yet, or from before this server) gets its first trusted publisher only from an admin or from `ROKSTONES_TRUSTED`: a ROKON list read at each start, replacing the publishers it gave before, which the account page shows but cannot remove:
+A stone's owners (or the admins) name GitHub Actions workflows that may publish it: repository `owner/repo`, workflow file, and optionally an environment, on the account page or through the API. While publishing is closed only the admins add them, and an OIDC token is granted only the stones whose publisher an admin added (an admin at the time of the exchange) or `ROKSTONES_TRUSTED` gave. Adding one looks up the repository's owner id on GitHub, so a deleted and re-registered owner name does not match. A stone with no owner on record (not published yet, or from before this server) gets its first trusted publisher only from an admin or from `ROKSTONES_TRUSTED`: a ROKON list read at each start, replacing the publishers it gave before, which the account page shows but cannot remove:
 
 ```rokon
 [

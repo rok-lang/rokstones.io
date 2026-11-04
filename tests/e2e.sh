@@ -179,6 +179,12 @@ bob_sess=$sess bob_csrf=$csrf
 req POST /me/tokens -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&name=x"
 expect_code 403 "non-admin token"
 expect_body "not open yet" "non-admin token message"
+req GET /me -H "Cookie: rks_session=$bob_sess"
+expect_code 200 "non-admin logged in"
+grep -q 'action="/me/tokens"\|action="/me/trusted"' "$T/b" && fail "forms offered to a non-admin"
+req POST /me/trusted -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&repository=acme/geom&workflow=publish.yml"
+expect_code 403 "non-admin trusted publisher"
+expect_body "not open yet" "non-admin trusted publisher message"
 ok "non-admin cannot get a token"
 
 login admin
@@ -354,6 +360,7 @@ req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geo
 expect_code 400 "bad workflow name"
 req POST /me/trusted -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&repository=acme/evil&workflow=publish.yml"
 expect_code 403 "not an owner"
+expect_body "not open yet" "not an owner body"
 req GET /me -H "Cookie: rks_session=$sess"
 expect_body '<td>geom</td><td>acme/geom</td><td>publish.yml</td>' "trusted publisher listed"
 expect_body '<td>seeded</td><td>acme/seeded</td><td>publish.yml</td><td><span class="muted">any</span></td><td><span class="muted">server config</span>' "seeded publisher listed"
@@ -515,13 +522,28 @@ req GET /me -H "Cookie: rks_session=$sess"
 tid=$(sed -n 's|.*action="/me/tokens/\([0-9a-f]*\)/revoke".*|\1|p' "$T/b" | head -1)
 [ -n "$tid" ] || fail "no revoke form"
 
-# Removing alice from the admins takes her power at once.
+# Removing alice from the admins takes her power at once: her token,
+# her account page and the trusted publishers she added. The seeded
+# publisher keeps working.
+req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&repository=acme/geom&workflow=publish.yml"
+expect_code 303 "admin adds a trusted publisher"
 kill "$server"; wait "$server" 2>/dev/null || true
 start_server bob
 req GET /api/v1/me "${auth[@]}"
-expect_body 'publish: false' "demoted"
+expect_code 403 "demoted token"
+expect_body 'Publishing is not open yet' "demoted token body"
 publish "${line//0.1.0/0.3.0}"
 expect_code 403 "demoted publish"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0" }'
+expect_code 403 "demoted yank"
+req POST /api/v1/trusted-publishers "${auth[@]}" --data-binary 'TrustedPublisher { stone: "geom", repository: "acme/geom", workflow: "other.yml" }'
+expect_code 403 "demoted trusted publisher api"
+req POST /me/tokens -H "Cookie: rks_session=$sess" --data "csrf=$csrf&name=again"
+expect_code 403 "demoted token create"
+exchange "$(mint "$(claims acme/geom publish.yml)")"
+expect_code 403 "a non-admin's trusted publisher"
+exchange "$(mint "$(claims acme/seeded publish.yml)")"
+expect_code 200 "seeded publisher while closed"
 kill "$server"; wait "$server" 2>/dev/null || true
 start_server alice
 

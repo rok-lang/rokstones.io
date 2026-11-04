@@ -65,6 +65,9 @@ pub struct Cfg {
     pub issuer: str = trust::GITHUB_ISSUER;
     /// ROKSTONES_TRUSTED: the bootstrap file of trusted publishers; "": none.
     pub trusted: str = "";
+    /// ROKSTONES_OPEN_PUBLISHING=1: accounts other than the admins get
+    /// tokens, trusted publishers and publishing. Off: they only log in.
+    pub open: bool = false;
 }
 
 /// `KEY=value` lines; `#` comments, blank lines, `export ` and one pair
@@ -128,12 +131,21 @@ pub fn load_cfg(path: str) throws -> Cfg {
         audience: if aud.is_empty() { host_of(url) } else { aud },
         issuer: issuer.strip_suffix("/") ?? issuer,
         trusted: optional(f, "ROKSTONES_TRUSTED"),
+        open: ["1", "true"].contains(optional(f, "ROKSTONES_OPEN_PUBLISHING").to_lowercase()),
     }
 }
 
 pub fn is_admin(cfg: Cfg, login: str) -> bool {
     !login.is_empty() && cfg.admins.contains("," + login.to_lowercase() + ",")
 }
+
+/// Whether account `login` may do more than log in: create tokens, add
+/// trusted publishers, publish and yank.
+pub fn may_act(cfg: Cfg, login: str) -> bool { is_admin(cfg, login) || (cfg.open && !login.is_empty()) }
+
+/// Whether trusted publisher `p` may be granted: from the seed file, or
+/// added by an account that may act.
+pub fn counts(cfg: Cfg, p: TrustedPublisher) -> bool { p.seeded || may_act(cfg, p.added_by) }
 
 #[derive(Rokon)]
 pub struct Account {
@@ -464,12 +476,11 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
     b.push_str(f"<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button class=\"btn-2 btn-sm\" type=\"submit\">Log out</button></form>\n");
     b.push_str("<h2 class=\"t-h3\">Publish tokens</h2>\n");
     let admin = is_admin(cfg, a.login);
-    let trusted = managed(db, a.id, admin);
-    if !admin {
-        b.push_str("<p>Publishing is not open yet. Until it is, stones are added by pull request to the index; <a href=\"/publishing#publishing\">Publishing</a> says how.</p>\n");
-        if !trusted.is_empty() { trusted_section(b, csrf, trusted); }
+    if !may_act(cfg, a.login) {
+        b.push_str("<p>Publishing is not open yet: this account can log in, but cannot create tokens, add trusted publishers, publish or yank. Until it is, stones are added by pull request to the index; <a href=\"/publishing#publishing\">Publishing</a> says how.</p>\n");
         return page(site, path, "Account", b.to_str(), 200);
     }
+    let trusted = managed(db, a.id, admin);
     if !fresh.is_empty() {
         b.push_str(f"<div class=\"callout help\"><span class=\"lab\">New token, shown once: copy it now</span><pre class=\"cmd\"><code>{esc(fresh)}</code></pre><p>Save it with <code class=\"ic\">rok login</code>, which reads it from stdin.</p></div>\n");
     }
@@ -545,6 +556,9 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     }
     let a = account(db, s.account) ?? Account { id: 0i64, login: "", created: 0i64 };
     let admin = is_admin(cfg, a.login);
+    if !may_act(cfg, a.login) {
+        return message(site, r.path, 403, "Publishing is not open yet", "This account can log in, but cannot create tokens, add trusted publishers, publish or yank yet.");
+    }
     if r.path == "/me/trusted" {
         let p = TrustedPublisher { stone: (f.get("stone") ?? "").trim(), repository: (f.get("repository") ?? "").trim(), workflow: (f.get("workflow") ?? "").trim(), environment: (f.get("environment") ?? "").trim() };
         try add_trusted(cfg, db, a, admin, p) catch e { return message(site, r.path, e.status, "Trusted publisher not added", e.msg); };
@@ -553,9 +567,6 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     if let rest: str = r.path.strip_prefix("/me/trusted/") {
         try remove_trusted(cfg, db, a, admin, rest.strip_suffix("/remove") ?? "") catch e { return message(site, r.path, e.status, "Trusted publisher not removed", e.msg); };
         return redirect("/me", []);
-    }
-    if !admin {
-        return message(site, r.path, 403, "Publishing is not open yet", "Publish tokens are not available for this account yet.");
     }
     if r.path == "/me/tokens" {
         let name = (f.get("name") ?? "").trim();
@@ -828,14 +839,19 @@ fn exchange(cfg: Cfg, db: Db, body: str) throws (ApiError) -> Resp {
     }
     let repo = c.get("repository") ?? "";
     let wref = c.get("workflow_ref") ?? "";
-    let keys = trust::grant(db.trusted, c);
+    // Only publishers from the seed file or from an account that may act.
+    let usable: List<TrustedPublisher> = List::new();
+    for p in db.trusted {
+        if counts(cfg, p) { usable.push(p); }
+    }
+    let keys = trust::grant(usable, c);
     if keys.is_empty() {
         let file = ((wref.split_once("/.github/workflows/") ?? ("", wref)).1.split_once("@") ?? (wref, "")).0;
         let env = c.get("environment") ?? "";
         throw index::err(403, f"no stone trusts {repo}, workflow {file}{if env.is_empty() { "" } else { ", environment " + env }}: an owner adds it as a trusted publisher at {cfg.url}/me");
     }
     let names: List<Value> = List::new();
-    for p in db.trusted {
+    for p in usable {
         if trust::matches(p, c) && !names.contains(Value::Str(p.stone)) { names.push(Value::Str(p.stone)); }
     }
     let tok = "rkt_" + try secret::random_hex(32) catch e { throw index::err(500, f"{e}"); };
@@ -933,13 +949,15 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
         let tok = token_of(db, presented) ?? Token { id: "", name: "", account: 0i64, hash: "", created: 0i64, last_used: 0i64 };
         if tok.id.is_empty() { throw index::err(401, "a valid token is required (Authorization: Bearer rks_..)"); }
         let a = account(db, tok.account) ?? no_account;
+        // A token kept from before publishing closed authorizes nothing.
+        if !may_act(cfg, a.login) { throw index::err(403, "Publishing is not open yet"); }
         auth = Auth { account: a, admin: is_admin(cfg, a.login), scope: none, login: a.login, who: f"{a.login} <{a.id}+{a.login}@users.noreply.github.com>", actor: Actor { id: a.id, login: a.login, at: 0i64 } };
         tok.last_used = now_secs();
         try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
     }
     let trusted = auth.scope is List<str>;
     if r.path == "/api/v1/me" {
-        return rokon_resp(200, "Me", [("login", Value::Str(auth.login)), ("publish", Value::Bool(auth.admin || trusted))]);
+        return rokon_resp(200, "Me", [("login", Value::Str(auth.login)), ("publish", Value::Bool(trusted || may_act(cfg, auth.login)))]);
     }
     if r.path.starts_with("/api/v1/trusted-publishers") {
         if trusted { throw index::err(403, "trusted publishers are managed with an account's token, not a trusted publishing one"); }
@@ -963,7 +981,7 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
         };
         return rokon_value(200, rokon::to_value(try add_trusted(cfg, db, a, auth.admin, p)));
     }
-    if !trusted && !auth.admin { throw index::err(403, "Publishing is not open yet"); }
+    if !trusted && !may_act(cfg, auth.login) { throw index::err(403, "Publishing is not open yet"); }
     try index::sync(cfg.index);
     let by = auth.actor;
     by.at = now_secs();
@@ -1332,6 +1350,17 @@ fn env_files() {
     expect(f["A"] == "1" && f["B"] == "two words" && f["C"] == "x=y" && f["D"] == "" && f.len() == 4, "parse");
     let cfg = Cfg { url: "", addr: "", client_id: "", client_secret: "", admins: ",alice,bob-2,", data: "", index: "", oauth: "", api: "" };
     expect(is_admin(cfg, "Alice") && is_admin(cfg, "bob-2") && !is_admin(cfg, "bob") && !is_admin(cfg, ""), "admins");
+    // Closed: only the admins act, and only their publishers and the seeds count.
+    expect(may_act(cfg, "alice") && !may_act(cfg, "bob") && !may_act(cfg, ""), "closed");
+    let p = TrustedPublisher { stone: "geom", repository: "acme/geom", workflow: "publish.yml", added_by: "bob" };
+    expect(!counts(cfg, p), "a non-admin's publisher");
+    p.added_by = "alice";
+    expect(counts(cfg, p), "an admin's publisher");
+    let seed = TrustedPublisher { stone: "geom", repository: "acme/geom", workflow: "publish.yml", seeded: true };
+    expect(counts(cfg, seed), "seeded");
+    cfg.open = true;
+    p.added_by = "bob";
+    expect(may_act(cfg, "bob") && !may_act(cfg, "") && counts(cfg, p), "open");
 }
 
 #[test]
