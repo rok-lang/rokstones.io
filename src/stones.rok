@@ -41,9 +41,9 @@ pub struct Version {
     /// Sent with the publish (meta::Meta); `""` when not given or not known.
     pub description: str = "";
     pub license: str = "";
-    /// Who published, yanked it (GitHub logins); `""` when not known.
-    pub by: str = "";
-    pub yanked_by: str = "";
+    /// Who published, yanked it; none when not known.
+    pub by: meta::Actor | none = none;
+    pub yanked_by: meta::Actor | none = none;
     /// Why it was yanked; `""` when not given.
     pub yank_message: str = "";
     /// Its metadata as published; empty when not known.
@@ -796,10 +796,10 @@ pub fn load(dir: str, r: Readmes, data: Data) -> Index {
             vs[i].meta = rel.meta;
             vs[i].description = rel.meta.description;
             vs[i].license = rel.meta.license;
-            if let a: meta::Actor = rel.published_by { vs[i].by = a.login; }
+            vs[i].by = rel.published_by;
             if vs[i].yanked {
                 vs[i].yank_message = rel.yank_message;
-                if let a: meta::Actor = rel.yanked_by { vs[i].yanked_by = a.login; }
+                vs[i].yanked_by = rel.yanked_by;
             }
         }
     }

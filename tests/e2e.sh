@@ -179,6 +179,12 @@ bob_sess=$sess bob_csrf=$csrf
 req POST /me/tokens -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&name=x"
 expect_code 403 "non-admin token"
 expect_body "not open yet" "non-admin token message"
+req GET /me -H "Cookie: rks_session=$bob_sess"
+expect_code 200 "non-admin logged in"
+grep -q 'action="/me/tokens"\|action="/me/trusted"' "$T/b" && fail "forms offered to a non-admin"
+req POST /me/trusted -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&repository=acme/geom&workflow=publish.yml"
+expect_code 403 "non-admin trusted publisher"
+expect_body "not open yet" "non-admin trusted publisher message"
 ok "non-admin cannot get a token"
 
 login admin
@@ -337,7 +343,7 @@ ok "metadata api"
 now=$(date +%s)
 # claims REPO WORKFLOW: what GitHub puts in a job's OIDC token.
 claims() {
-    printf '{"jti":"%s","sub":"repo:%s:ref:refs/tags/v1","aud":"%s","iss":"http://127.0.0.1:%s/oidc","repository":"%s","repository_owner_id":"4242","workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","job_workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","iat":%s,"nbf":%s,"exp":%s}' \
+    printf '{"jti":"%s","sub":"repo:%s:ref:refs/tags/v1","aud":"%s","iss":"http://127.0.0.1:%s/oidc","repository":"%s","repository_owner_id":"4242","ref":"refs/tags/v1","actor":"carol","actor_id":"3003","run_id":"777","run_attempt":"1","workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","job_workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","iat":%s,"nbf":%s,"exp":%s}' \
         "$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')" "$1" "${AUD:-rokstones.test}" "$gh_port" "$1" "$1" "$2" "$1" "$2" "$now" "$now" "$((now + 300))"
 }
 mint() { curl -s --data-binary "$1" "http://127.0.0.1:$gh_port/_mint"; }
@@ -354,6 +360,7 @@ req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geo
 expect_code 400 "bad workflow name"
 req POST /me/trusted -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&repository=acme/evil&workflow=publish.yml"
 expect_code 403 "not an owner"
+expect_body "not open yet" "not an owner body"
 req GET /me -H "Cookie: rks_session=$sess"
 expect_body '<td>geom</td><td>acme/geom</td><td>publish.yml</td>' "trusted publisher listed"
 expect_body '<td>seeded</td><td>acme/seeded</td><td>publish.yml</td><td><span class="muted">any</span></td><td><span class="muted">server config</span>' "seeded publisher listed"
@@ -413,7 +420,8 @@ expect_code 200 "trusted yank"
 req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.0.9", undo: true }'
 expect_code 200 "trusted unyank"
 req GET /api/v1/stones/geom
-expect_body 'version: "0.0.9", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes" }, has_readme: false, downloads: 0, published_by: Actor { id: 0, login: "github:acme/geom/.github/workflows/publish.yml@refs/tags/v1"' "trusted publisher recorded"
+expect_body 'version: "0.0.9", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes" }, has_readme: false, downloads: 0, published_by: Actor { id: 3003, login: "carol", at: [0-9]*, via: Via { repository: "acme/geom", workflow: "publish.yml", ref: "refs/tags/v1", run_id: "777", run_attempt: "1" } }' "trusted publisher recorded"
+expect_body 'yanked_by: Actor { id: 3003, login: "carol", at: [0-9]*, via: Via { repository: "acme/geom"' "trusted yank recorded"
 
 # A version committed with `rok publish --index-dir` has no metadata:
 # publishing it again from the same tree fills it in.
@@ -480,10 +488,12 @@ expect_body '<dt>Owner</dt><dd><a href="https://github.com/alice">alice</a></dd>
 expect_body 'by <a href="https://github.com/alice">alice</a>' "publisher on the page"
 for _ in $(seq 50); do
     req GET /stones/geom/versions
-    grep -q '(trusted publishing)' "$T/b" && break
+    grep -q 'via GitHub Actions' "$T/b" && break
     sleep 0.2
 done
-expect_body '<a href="https://github.com/acme/geom/actions/workflows/publish.yml" title="acme/geom/.github/workflows/publish.yml@refs/tags/v1">acme/geom</a> <span class="muted">(trusted publishing)</span>' "trusted publisher on the versions page"
+expect_body '<a href="https://github.com/carol">carol</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777" title="refs/tags/v1, run 777">publish.yml</a>)' "trusted publisher on the versions page"
+req GET /stones/geom/0.0.9
+expect_body '<dt>Published</dt><dd><time datetime="[0-9-]*">[0-9-]*</time> by <a href="https://github.com/carol">carol</a> via GitHub Actions (<a href="https://github.com/acme/geom">acme/geom</a>, <a href="https://github.com/acme/geom/actions/runs/777"' "trusted publisher on the version page"
 req GET /stones/geom
 expect_body '<dt>Category</dt><dd>mathematics</dd>' "categories on the page"
 expect_body '<p>Shapes, <strong>fast</strong>.</p>' "published README rendered"
@@ -512,13 +522,28 @@ req GET /me -H "Cookie: rks_session=$sess"
 tid=$(sed -n 's|.*action="/me/tokens/\([0-9a-f]*\)/revoke".*|\1|p' "$T/b" | head -1)
 [ -n "$tid" ] || fail "no revoke form"
 
-# Removing alice from the admins takes her power at once.
+# Removing alice from the admins takes her power at once: her token,
+# her account page and the trusted publishers she added. The seeded
+# publisher keeps working.
+req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&repository=acme/geom&workflow=publish.yml"
+expect_code 303 "admin adds a trusted publisher"
 kill "$server"; wait "$server" 2>/dev/null || true
 start_server bob
 req GET /api/v1/me "${auth[@]}"
-expect_body 'publish: false' "demoted"
+expect_code 403 "demoted token"
+expect_body 'Publishing is not open yet' "demoted token body"
 publish "${line//0.1.0/0.3.0}"
 expect_code 403 "demoted publish"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.1.0" }'
+expect_code 403 "demoted yank"
+req POST /api/v1/trusted-publishers "${auth[@]}" --data-binary 'TrustedPublisher { stone: "geom", repository: "acme/geom", workflow: "other.yml" }'
+expect_code 403 "demoted trusted publisher api"
+req POST /me/tokens -H "Cookie: rks_session=$sess" --data "csrf=$csrf&name=again"
+expect_code 403 "demoted token create"
+exchange "$(mint "$(claims acme/geom publish.yml)")"
+expect_code 403 "a non-admin's trusted publisher"
+exchange "$(mint "$(claims acme/seeded publish.yml)")"
+expect_code 200 "seeded publisher while closed"
 kill "$server"; wait "$server" 2>/dev/null || true
 start_server alice
 

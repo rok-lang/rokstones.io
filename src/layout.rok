@@ -3,6 +3,7 @@
 
 use pkg::Site;
 use markdown::{Options, esc};
+use pkg::meta;
 use pkg::stones;
 use pkg::stones::{Stone, Version};
 use rok::core::cmp::Ordering;
@@ -557,7 +558,8 @@ fn stone_head(s: Stone, tab: str) -> str {
     let home = esc(url(stone_out(s.name)));
     let notice = if !s.at.is_empty() && s.at != s.top {
         let which = if stones::cmp_vers(s.at, s.top) == Ordering::Less { "an old version" } else { "not the latest release" };
-        let who = if l.yanked_by.is_empty() { "" } else { f" by {esc(l.yanked_by)}" };
+        let yb = actor_link(l.yanked_by);
+        let who = if yb.is_empty() { "" } else { f" by {yb}" };
         let why = if l.yank_message.is_empty() { "" } else { f" Reason: {esc(l.yank_message)}." };
         let gone = if l.yanked { f" It is yanked{who}: projects that pinned it keep building, new ones will not resolve it.{why}" } else { "" };
         f"<p class=\"callout help\"><span class=\"lab\">{if l.yanked { "yanked" } else { "old version" }}</span><span>This is {which} of {esc(s.name)}; the latest is <a href=\"{home}\">{esc(s.top)}</a>.{gone}</span></p>"
@@ -645,6 +647,29 @@ pub fn login_link(login: str) -> str {
     f"<a href=\"https://github.com/{esc(http::pct_encode(login))}\">{esc(login)}</a>"
 }
 
+/// Who did it, after "by": a GitHub user, or for a trusted publish the
+/// user who triggered the run, "via GitHub Actions", the repository and
+/// the run; "" when not known.
+pub fn actor_link(a: meta::Actor | none) -> str {
+    let x = a ?? { return ""; };
+    let v = x.via ?? { return if x.login.is_empty() { "" } else { login_link(x.login) }; };
+    let repo = f"https://github.com/{esc(v.repository)}";
+    let run = meta::run_url(v);
+    let wf = esc(http::pct_encode(v.workflow));
+    let (href, title) = if run.is_empty() { (f"{repo}/actions/workflows/{wf}", v.ref) } else { (esc(run), f"{v.ref}, run {v.run_id}") };
+    let tip = if title.is_empty() { "" } else { f" title=\"{esc(title)}\"" };
+    let how = f"GitHub Actions (<a href=\"{repo}\">{esc(v.repository)}</a>, <a href=\"{href}\"{tip}>{esc(v.workflow)}</a>)";
+    if x.login.is_empty() { how } else { f"{login_link(x.login)} via {how}" }
+}
+
+/// `actor_link` as plain text, for a title attribute.
+pub fn actor_text(a: meta::Actor | none) -> str {
+    let x = a ?? { return ""; };
+    let v = x.via ?? { return x.login; };
+    let how = f"GitHub Actions ({v.repository}, {v.workflow})";
+    if x.login.is_empty() { how } else { f"{x.login} via {how}" }
+}
+
 fn side(site: Site, s: Stone) -> str {
     let l = s.latest;
     let m = s.meta;
@@ -654,9 +679,10 @@ fn side(site: Site, s: Stone) -> str {
     let shown = esc(src.replace("https://", "").strip_suffix(".git") ?? src.replace("https://", "")).replace("/", "/<wbr>");
     let repo_html = if repo.is_empty() { f"<code>{shown}</code>" } else { f"<a href=\"{esc(repo)}\">{shown}</a>" };
     let kv = StrBuf::new();
-    if !l.date.is_empty() || !l.by.is_empty() {
+    let pb = actor_link(l.by);
+    if !l.date.is_empty() || !pb.is_empty() {
         let when = if l.date.is_empty() { "" } else { f"<time datetime=\"{esc(l.date)}\">{esc(l.date)}</time>" };
-        let who = if l.by.is_empty() { "" } else { f"{if when.is_empty() { "by" } else { " by" }} {login_link(l.by)}" };
+        let who = if pb.is_empty() { "" } else { f"{if when.is_empty() { "by" } else { " by" }} {pb}" };
         kv.push_str(f"<dt>Published</dt><dd>{when}{who}</dd>");
     }
     if !s.owners.is_empty() {
@@ -790,12 +816,14 @@ pub fn versions_page(site: Site, s: Stone) -> str {
         let page = esc(url(ver_out(s.name, v.version)));
         if v.yanked {
             let why = if v.yank_message.is_empty() { "" } else { f": {v.yank_message}" };
-            let by = if v.yanked_by.is_empty() && why.is_empty() { "" } else { f" title=\"yanked{if v.yanked_by.is_empty() { "" } else { f" by {v.yanked_by}" }}{why}\"" };
+            let yb = actor_text(v.yanked_by);
+            let by = if yb.is_empty() && why.is_empty() { "" } else { f" title=\"{esc(f"yanked{if yb.is_empty() { "" } else { f" by {yb}" }}{why}")}\"" };
             tags.push_str(f"<span class=\"tag\"{by}>yanked</span>");
         }
         if stones::is_pre(v.version) { tags.push_str("<span class=\"tag\">pre-release</span>"); }
         let when = if v.date.is_empty() { "<span class=\"muted\">unknown</span>" } else { f"<time datetime=\"{esc(v.date)}\">{esc(v.date)}</time>" };
-        let who = if v.by.is_empty() { "<span class=\"muted\">unknown</span>" } else { login_link(v.by) };
+        let pb = actor_link(v.by);
+        let who = if pb.is_empty() { "<span class=\"muted\">unknown</span>" } else { pb };
         b.push_str(f"<tr{if v.yanked { " class=\"yanked\"" } else { "" }}><td><a class=\"v\" href=\"{page}\">{esc(v.version)}</a>{tags.to_str()}</td><td>{when}</td><td>{who}</td><td class=\"mono\">{commit_link(v)}</td><td class=\"mono\"><code title=\"{esc(v.tree)}\">{short(v.tree)}</code></td><td>{if v.license.is_empty() { "<span class=\"muted\">none</span>" } else { esc(v.license) }}</td></tr>");
     }
     let body = f"<h2 class=\"t-h3\">{plural(s.versions.len(), "version", "versions")}</h2>
@@ -900,4 +928,22 @@ fn near_names() {
     assert(closest(names, "jsno").join(",") == "json,json5", closest(names, "jsno").join(","));
     assert(closest(names, "mark").join(",") == "markdown", "contained");
     assert(closest(names, "zzzzzz").is_empty(), "nothing near");
+}
+
+#[test]
+fn publishers() {
+    assert(actor_link(none).is_empty() && actor_text(none).is_empty(), "unknown");
+    let ann = meta::Actor { id: 7i64, login: "ann", at: 1i64 };
+    assert(actor_link(ann) == "<a href=\"https://github.com/ann\">ann</a>", actor_link(ann));
+    let v = meta::Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.2.0", run_id: "123", run_attempt: "1" };
+    let t = meta::Actor { id: 7i64, login: "ann", at: 1i64, via: v };
+    let want = "<a href=\"https://github.com/ann\">ann</a> via GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/runs/123\" title=\"refs/tags/v0.2.0, run 123\">publish.yml</a>)";
+    assert(actor_link(t) == want, actor_link(t));
+    assert(actor_text(t) == "ann via GitHub Actions (rok-lang/json, publish.yml)", actor_text(t));
+    let w = meta::Via { repository: "rok-lang/json", workflow: "publish.yml", ref: "refs/tags/v0.2.0" };
+    let anon = meta::Actor { id: 0i64, login: "", at: 1i64, via: w };
+    let w2 = "GitHub Actions (<a href=\"https://github.com/rok-lang/json\">rok-lang/json</a>, <a href=\"https://github.com/rok-lang/json/actions/workflows/publish.yml\" title=\"refs/tags/v0.2.0\">publish.yml</a>)";
+    assert(actor_link(anon) == w2, actor_link(anon));
+    let old = meta::Actor { id: 0i64, login: "github:acme/geom/.github/workflows/publish.yml@refs/tags/v1", at: 1i64 };
+    assert(actor_link(old).contains("(trusted publishing)"), actor_link(old));
 }

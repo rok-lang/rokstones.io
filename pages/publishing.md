@@ -54,7 +54,7 @@ A GitHub Actions workflow can publish a stone without any token stored in the re
 
 Set it up once per stone:
 
-1. On your [account page](/me), under **Trusted publishers**, add the stone, its GitHub repository (`owner/repo`), the workflow's file name (`publish.yml`) and, if the job runs in a GitHub environment, its name. Only the stone's owners can add one. A stone published before accounts existed has no owner on record; ask the registry's maintainers to add its first trusted publisher.
+1. On your [account page](/me), under **Trusted publishers**, add the stone, its GitHub repository (`owner/repo`), the workflow's file name (`publish.yml`) and, if the job runs in a GitHub environment, its name. Only the stone's owners can add one, and while publishing is not open yet only the registry's maintainers. A stone published before accounts existed has no owner on record; ask the registry's maintainers to add its first trusted publisher.
 2. Add the workflow below to the repository as `.github/workflows/publish.yml`. It runs when a `v*` tag is pushed, checks that the tag matches `version` in `rok.rokon`, trades the job's OIDC token (audience `rokstones.io`) for a publish token, logs in with it and publishes.
 
 ```yaml

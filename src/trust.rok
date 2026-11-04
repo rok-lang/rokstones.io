@@ -10,6 +10,7 @@ use rok::core::encoding::base64;
 use pkg::index;
 use pkg::index::ApiError;
 use pkg::json;
+use pkg::meta;
 use pkg::secret;
 use pkg::stones;
 
@@ -51,7 +52,7 @@ pub struct TrustToken {
     pub hash: str;
     /// `index::key` of each stone it may publish and yank.
     pub stones: List<str>;
-    /// `github:<workflow_ref>`, recorded as the publisher.
+    /// `github:<workflow_ref>`, shown by `/api/v1/me`.
     pub publisher: str;
     pub repository: str;
     /// The OIDC token's `jti`: it is traded once.
@@ -60,6 +61,11 @@ pub struct TrustToken {
     pub expires: i64;
     /// When the OIDC token expires: the record outlives it for the jti check.
     pub jwt_expires: i64;
+    /// The GitHub user who triggered the run (`actor`, `actor_id`); "", 0:
+    /// the token named none.
+    pub actor: str = "";
+    pub actor_id: i64 = 0i64;
+    pub via: meta::Via | none = none;
 }
 
 /// Whether the record is still needed: a live token or a jti to refuse.
@@ -240,6 +246,24 @@ pub fn merge_seeds(kept: List<TrustedPublisher>, seeds: List<TrustedPublisher>) 
     out
 }
 
+/// The run named by checked claims `c`; none when `workflow_ref` is not
+/// the caller's workflow file.
+pub fn via_of(c: Dict<str, str>) -> meta::Via | none {
+    let (repo, file, r) = meta::split_workflow_ref(c.get("workflow_ref") ?? "") ?? { return none; };
+    if !is_repo(repo) { return none; }
+    meta::Via { repository: repo, workflow: file, ref: c.get("ref") ?? r, run_id: c.get("run_id") ?? "", run_attempt: c.get("run_attempt") ?? "" }
+}
+
+/// The GitHub user who triggered the run: login and numeric id; "" and
+/// 0 when the claims name no valid one.
+pub fn actor_of(c: Dict<str, str>) -> (str, i64) {
+    let login = c.get("actor") ?? "";
+    // Apps act as `name[bot]`.
+    if !is_gh_name(login.strip_suffix("[bot]") ?? login, 39usize) { return ("", 0i64); }
+    let id = try (c.get("actor_id") ?? "").parse::<i64>() catch _ { 0i64 };
+    (login, if id > 0i64 { id } else { 0i64 })
+}
+
 /// The stones (`index::key`) whose publishers match checked claims `c`.
 pub fn grant(all: List<TrustedPublisher>, c: Dict<str, str>) -> List<str> {
     let out: List<str> = List::new();
@@ -383,6 +407,18 @@ fn claim_matching() {
     expect(g.len() == 2 && g.contains("geom") && g.contains("ge_om") && !g.contains("other"), f"{g:?}");
     expect(is_repo("rok-lang/rok-syntax") && !is_repo("rok-lang") && !is_repo("a/b/c") && !is_repo("a/..") && !is_repo("a b/c"), "repos");
     expect(is_workflow("publish.yml") && is_workflow("release.yaml") && !is_workflow("a/b.yml") && !is_workflow("publish") && !is_workflow(".yml"), "workflows");
+    let run = claims(",\"actor\":\"ann\",\"actor_id\":\"77\",\"run_id\":\"123\",\"run_attempt\":\"2\"");
+    let rc = (try! parse_jwt(sign(HEADER, run))).claims;
+    let v = via_of(rc) ?? { panic("no via"); };
+    expect(v.repository == "acme/geom" && v.workflow == "publish.yml" && v.ref == "refs/tags/v1.0.0" && v.run_id == "123" && v.run_attempt == "2", f"{v.workflow}");
+    let (al, ai) = actor_of(rc);
+    expect(al == "ann" && ai == 77i64, "actor");
+    let (nl, ni) = actor_of(c);
+    expect(nl.is_empty() && ni == 0i64, "no actor");
+    let (bl, _) = actor_of((try! parse_jwt(sign(HEADER, claims(",\"actor\":\"renovate[bot]\""))).claims));
+    expect(bl == "renovate[bot]", "bot actor");
+    let (xl, _) = actor_of((try! parse_jwt(sign(HEADER, claims(",\"actor\":\"a/b\""))).claims));
+    expect(xl.is_empty(), "bad actor");
     let status = 0;
     try check_publisher(publisher("geom", "acme/geom", "../x.yml", "")) catch e { status = e.status; };
     expect(status == 400, "bad workflow");

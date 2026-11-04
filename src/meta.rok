@@ -44,12 +44,53 @@ pub struct Meta {
 
 pub fn empty() -> Meta { try! rokon::from_str("Meta {}") }
 
+/// The GitHub Actions run behind a trusted publish, from its OIDC claims.
+#[derive(Rokon)]
+pub struct Via {
+    /// `owner/repo`.
+    pub repository: str;
+    /// File name under `.github/workflows/`.
+    pub workflow: str;
+    /// The ref the workflow ran for (`refs/tags/v1.0.0`).
+    pub ref: str = "";
+    /// Decimal; "": not given.
+    pub run_id: str = "";
+    pub run_attempt: str = "";
+}
+
 /// An account at a moment: who did something, and when (unix seconds).
+/// For a trusted publish, the GitHub user who triggered the run (id 0 and
+/// login "" when the token named none) and the run.
 #[derive(Rokon)]
 pub struct Actor {
     pub id: i64;
     pub login: str;
     pub at: i64;
+    pub via: Via | none = none;
+}
+
+/// `owner/repo/.github/workflows/<file>@<ref>` split into repository,
+/// file and ref.
+pub fn split_workflow_ref(w: str) -> (str, str, str) | none {
+    let (path, r) = w.split_once("@") ?? (w, "");
+    let (repo, file) = path.split_once("/.github/workflows/") ?? { return none; };
+    if repo.is_empty() || file.is_empty() { return none; }
+    (repo, file, r)
+}
+
+fn digits(s: str) -> bool {
+    if s.is_empty() || s.len() > 20 { return false; }
+    for ch in s.chars() {
+        if !ch.is_ascii_digit() { return false; }
+    }
+    true
+}
+
+/// The run's page; "" when the run id is missing or not a number.
+pub fn run_url(v: Via) -> str {
+    if !digits(v.run_id) || v.repository.is_empty() { return ""; }
+    let attempt = if digits(v.run_attempt) && v.run_attempt != "1" { f"/attempts/{v.run_attempt}" } else { "" };
+    f"https://github.com/{v.repository}/actions/runs/{v.run_id}{attempt}"
 }
 
 /// One published version. `name` is `index::key`, `native/` prefixed for
@@ -138,6 +179,22 @@ fn records() {
     expect(back.meta.license == "MIT" && back.yanked_by is none, "round trip");
     let old: Release = try rokon::from_str("Release { name: \"x\", version: \"1.0.0\", meta: Meta {} }") catch e { panic(f"{e}"); };
     expect(old.published_by is none && old.meta.description.is_empty() && old.meta.size is none && old.downloads == 0i64, "defaults");
+    let acct: Release = try rokon::from_str("Release { name: \"x\", version: \"1.0.0\", meta: Meta {}, published_by: Actor { id: 7, login: \"ann\", at: 3 }, yanked_by: none }") catch e { panic(f"{e}"); };
+    expect(acct.published_by is Actor && acct.unyanked_by is none, "old actor");
+    if let a: Actor = acct.published_by { expect(a.login == "ann" && a.via is none, "old actor via"); }
+    let v = Via { repository: "acme/geom", workflow: "publish.yml", ref: "refs/tags/v1", run_id: "99", run_attempt: "1" };
+    let t = Release { name: "geom", version: "0.2.0", meta: empty(), published_by: Actor { id: 5i64, login: "ann", at: 1i64, via: v }, yanked_by: none, unyanked_by: none };
+    let tb: Release = try rokon::from_str(try! rokon::to_str(t)) catch e { panic(f"{e}"); };
+    let w = (tb.published_by ?? Actor { id: 0i64, login: "", at: 0i64 }).via ?? Via { repository: "", workflow: "" };
+    expect(w.run_id == "99" && w.ref == "refs/tags/v1", "via round trip");
+    expect(run_url(v) == "https://github.com/acme/geom/actions/runs/99", run_url(v));
+    v.run_attempt = "2";
+    expect(run_url(v) == "https://github.com/acme/geom/actions/runs/99/attempts/2", run_url(v));
+    v.run_id = "9x";
+    expect(run_url(v).is_empty(), "bad run id");
+    let (r, f, g) = split_workflow_ref("acme/geom/.github/workflows/publish.yml@refs/tags/v1") ?? ("", "", "");
+    expect(r == "acme/geom" && f == "publish.yml" && g == "refs/tags/v1", "workflow ref");
+    expect(split_workflow_ref("acme/geom") is none, "not a workflow ref");
     let x = empty();
     x.has_lib = true;
     x.size = 1234i64;
