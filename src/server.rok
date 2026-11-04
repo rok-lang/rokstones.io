@@ -620,7 +620,13 @@ fn api_route(cfg: Cfg, r: Request) -> Resp {
 fn actor_value(a: Actor | none) -> Value {
     match a {
         x: Actor => {
-            let v = rokon::to_value(x);
+            // A trusted publish is the repository owner's; who started the
+            // run stays in the data file only.
+            let shown = match x.via {
+                w: meta::Via => Actor { id: 0i64, login: meta::owner_of(w), at: x.at, via: w },
+                none => x,
+            };
+            let v = rokon::to_value(shown);
             // An account's record keeps its old shape.
             if let Value::Struct { name: n, fields } = v {
                 if fields.get("via") == Value::None { fields.remove("via"); }

@@ -58,6 +58,12 @@ pub struct Via {
     pub run_attempt: str = "";
 }
 
+/// Who a trusted publish is shown as: the repository's owner (the
+/// organisation or user), not the account that started the run.
+pub fn owner_of(v: Via) -> str {
+    if let p: (str, str) = v.repository.split_once("/") { p.0 } else { v.repository }
+}
+
 /// An account at a moment: who did something, and when (unix seconds).
 /// For a trusted publish, the GitHub user who triggered the run (id 0 and
 /// login "" when the token named none) and the run.
