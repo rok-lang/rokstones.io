@@ -546,16 +546,34 @@ fn line_key(line: str) -> str | none {
     name + "@" + version
 }
 
-/// The date each version's line was first added to the index `dir`
-/// (commit date, `YYYY-MM-DD`), by `name@version`; empty without history.
+/// `YYYY-MM-DDTHH:MMZ` of a unix time; "" for none.
+pub fn utc_minute(t: i64) -> str {
+    if t <= 0i64 { return ""; }
+    let z = t / 86400i64 + 719468i64;
+    let era = z / 146097i64;
+    let doe = z - era * 146097i64;
+    let yoe = (doe - doe / 1460i64 + doe / 36524i64 - doe / 146096i64) / 365i64;
+    let doy = doe - (365i64 * yoe + yoe / 4i64 - yoe / 100i64);
+    let mp = (5i64 * doy + 2i64) / 153i64;
+    let d = doy - (153i64 * mp + 2i64) / 5i64 + 1i64;
+    let m = if mp < 10i64 { mp + 3i64 } else { mp - 9i64 };
+    let y = yoe + era * 400i64 + (if m <= 2i64 { 1i64 } else { 0i64 });
+    let secs = t % 86400i64;
+    let p2 = |x: i64| if x < 10i64 { f"0{x}" } else { f"{x}" };
+    f"{y}-{p2(m)}-{p2(d)}T{p2(secs / 3600i64)}:{p2(secs % 3600i64 / 60i64)}Z"
+}
+
+/// When each version's line was first added to the index `dir` (commit
+/// time, UTC, `YYYY-MM-DDTHH:MMZ`), by `name@version`; empty without
+/// history.
 pub fn version_dates(dir: str) -> Dict<str, str> {
     let out: Dict<str, str> = Dict::new();
-    let log = git(["-C", dir, "log", "--reverse", "--relative", "--no-renames", "--no-color", "--no-ext-diff", "-p", "-U0", "--format==%cs"]) ?? "";
-    // `=<date>` heads each commit; no line of a patch starts with `=`.
+    let log = git(["-C", dir, "log", "--reverse", "--relative", "--no-renames", "--no-color", "--no-ext-diff", "-p", "-U0", "--format==%ct"]) ?? "";
+    // `=<unix time>` heads each commit; no line of a patch starts with `=`.
     let cur = "";
     for l in log.split("\n") {
         if l.starts_with("=") {
-            cur = l[1:];
+            cur = utc_minute(try l[1:].parse::<i64>() catch _ { 0i64 });
         } else if l.starts_with("+Stone {") {
             let key = line_key(l[1:]) ?? { continue; };
             if !out.contains_key(key) { out.insert(key, cur); }
@@ -904,4 +922,11 @@ fn lines() {
     expect(repo_link("https://github.com/o/r.git", "abc", "docs/a.md") == "https://github.com/o/r/blob/abc/docs/a.md", "blob link");
     expect(repo_link("https://github.com/o/r", "abc", "./img/x.PNG") == "https://github.com/o/r/raw/abc/img/x.PNG", "raw link");
     expect(repo_link("https://github.com/o/r", "abc", "javascript:alert(1)") == "#", "scheme dropped");
+}
+
+#[test]
+fn utc_minute_formats() {
+    assert(utc_minute(0i64) == "");
+    assert(utc_minute(1793792592i64) == "2026-11-04T11:43Z");
+    assert(utc_minute(951782400i64) == "2000-02-29T00:00Z");
 }

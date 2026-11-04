@@ -885,9 +885,9 @@ fn rokon_value(status: i32, v: Value) -> Resp {
 }
 
 /// Fill in what `rok publish --index-dir` left out of a version already
-/// in the index from the same tree: its metadata and README. A version
-/// published through this API is taken.
-fn fill_in(cfg: Cfg, db: Db, k: str, p: index::Publish, have: str) throws (ApiError) {
+/// in the index from the same tree: its metadata, README and publisher. A
+/// version published through this API is taken.
+fn fill_in(cfg: Cfg, db: Db, k: str, p: index::Publish, have: str, by: Actor) throws (ApiError) {
     let e = p.entry;
     let taken = index::err(409, f"{e.name} {e.version} is already in the index");
     if e.native { throw taken; }
@@ -898,6 +898,7 @@ fn fill_in(cfg: Cfg, db: Db, k: str, p: index::Publish, have: str) throws (ApiEr
     }
     let i = release_at(db, k, e.version);
     db.releases[i].meta = meta::over(db.releases[i].meta, p.meta);
+    db.releases[i].published_by = by;
     let rp = meta::readme_file(cfg.data, k, e.version);
     if !p.readme.is_empty() && !fs::exists(rp) {
         try {
@@ -997,7 +998,7 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
         for w in p.warnings { warnings.push(Value::Str(w)); }
         try index::check_source(cfg.data + "/sources", e);
         if let have: str = try index::tree_at(cfg.index, e.native, e.name, e.version) {
-            try fill_in(cfg, db, k, p, have);
+            try fill_in(cfg, db, k, p, have, by);
             warnings.push(Value::Str(f"{e.name} {e.version} was already in the index from this tree; its missing metadata is filled in"));
         } else {
             try index::publish(cfg.index, e, auth.who);
