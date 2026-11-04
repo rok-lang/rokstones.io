@@ -2,6 +2,8 @@
 
 A **stone** is a Rok package: one git repository with `rok.rokon` at its root and its sources in `src/`. The registry is nothing more than a single git repository, the [index](https://github.com/rok-lang/rokstones.io-index). Each version points to a commit in the stone's own repository, and `rok` fetches that commit and verifies it by tree hash. There is no server hosting source tarballs.
 
+Using and publishing stones needs Rok 0.2 or later. The index is in the 0.2 format, which Rok 0.1 cannot read, and 0.1 is no longer supported: update with `rok toolchain update`.
+
 ## Using stones
 
 Add a dependency with `rok add` in your project directory.
