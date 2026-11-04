@@ -35,16 +35,9 @@ Publishing adds one line to the index repository. Sources are not uploaded: the 
 
 The stone repository must have `rok.rokon` (`name`, `version`) at its root and its sources in `src/` (a library: `src/lib.rok`), a clean work tree, and its commit pushed to `origin`. Dependencies must be stones only (no `Dep::path` / `Dep::git`). Check what would be published with `rok publish --dry-run`.
 
-With a rokstones.io account token, `rok login` keeps it and `rok publish` sends the line to the registry, which adds it to the index. Tokens are open to the registry's maintainers only for now; a stone that has a trusted publisher is published from GitHub Actions instead (see [Trusted publishing](#trusted-publishing)). Without either, a stone is added by pull request: fork the index, let `rok publish --index-dir` commit the line in your checkout, push, and send it as a pull request to the [index repository](https://github.com/rok-lang/rokstones.io-index):
+With a rokstones.io account token, `rok login` keeps it and `rok publish` sends the line to the registry, which adds it to the index. A stone that has a trusted publisher is published from GitHub Actions instead (see [Trusted publishing](#trusted-publishing)). Publishing is not open to everyone yet: tokens and trusted publishers are for the registry's maintainers for now, and the index takes lines only from the registry.
 
-```sh
-git clone https://github.com/<you>/rokstones.io-index
-rok publish --index-dir rokstones.io-index
-```
-
-Once merged, the stone appears on this site.
-
-A version published by mistake is not deleted but yanked: `rok yank <name>@0.3.1` (with `--index-dir <checkout>` for a pull request; undo with `--undo`). Projects that already pinned it in `rok.lock` keep working.
+A version published by mistake is not deleted but yanked: `rok yank <name>@0.3.1` (undo with `--undo`). Projects that already pinned it in `rok.lock` keep working.
 
 The index line format is described in the [index README](https://github.com/rok-lang/rokstones.io-index#readme).
 
