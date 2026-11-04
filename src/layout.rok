@@ -180,7 +180,7 @@ fn footer(site: Site) -> str {
         cols: [
             ("Learn", f"<a href=\"{d}/learn\">Guide</a><a href=\"{d}/examples\">Examples</a><a href=\"{esc(site.playground)}\">Playground</a>"),
             ("Reference", f"<a href=\"{d}/spec\">Language spec</a><a href=\"{d}/std\">Std library</a><a href=\"{d}/learn/16-tools\">Tools</a>"),
-            ("Ecosystem", f"<a href=\"/\">Stones</a><a href=\"/publishing\">Publishing</a><a href=\"{esc(site.index_repo)}\">Index repository</a><a href=\"{gh}/rok.vscode\">VS Code</a><a href=\"{gh}/rok.vim\">Vim</a>"),
+            ("Ecosystem", f"<a href=\"/\">Stones</a><a href=\"/publishing\">Publishing</a><a href=\"{gh}/rok.vscode\">VS Code</a><a href=\"{gh}/rok.vim\">Vim</a>"),
             ("Project", f"<a href=\"{esc(site.home)}/roadmap\">Roadmap</a><a href=\"{gh}\">GitHub</a><a href=\"{chrome::SECURITY}\">Security</a><a href=\"{gh}/rok/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a>"),
         ],
         sites: chrome::Sites { home: site.home, docs: site.docs + "/latest", stones: "/", playground: site.playground, current: "stones" },
@@ -419,7 +419,7 @@ pub fn landing(site: Site, all: List<Stone>) -> str {
 <p>Run this in a package directory, then <code class=\"ic\">use {esc(example)}::..;</code> in your code.</p>
 <div class=\"inst\"><div class=\"ipanel on\"><pre class=\"sh\"><code><span class=\"p\" aria-hidden=\"true\">$ </span>rok add {esc(example)}</code></pre>{chrome::copy_button("rok add " + example, false)}</div></div></section>
 <section><h2 class=\"t-h3\">Publishing</h2>
-<p>A version is one line in the <a href=\"{esc(site.index_repo)}\">index repository</a> naming a commit of the stone's own repository. Until publishing opens to everyone, send that line as a pull request.</p>
+<p>Stones are published to rokstones.io with <code class=\"ic\">rok publish</code>, or from GitHub Actions with trusted publishing. Publishing is not open to everyone yet.</p>
 <p><a href=\"/publishing#publishing\">How publishing works</a></p></section>
 </aside>
 </div>

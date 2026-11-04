@@ -477,7 +477,7 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
     b.push_str("<h2 class=\"t-h3\">Publish tokens</h2>\n");
     let admin = is_admin(cfg, a.login);
     if !may_act(cfg, a.login) {
-        b.push_str("<p>Publishing is not open yet: this account can log in, but cannot create tokens, add trusted publishers, publish or yank. Until it is, stones are added by pull request to the index; <a href=\"/publishing#publishing\">Publishing</a> says how.</p>\n");
+        b.push_str("<p>Publishing is not open yet: this account can log in, but cannot create tokens, add trusted publishers, publish or yank. <a href=\"/publishing#publishing\">Publishing</a> says how it works.</p>\n");
         return page(site, path, "Account", b.to_str(), 200);
     }
     let trusted = managed(db, a.id, admin);
