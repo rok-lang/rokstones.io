@@ -10,8 +10,6 @@ Needs the Rok toolchain (`rok`, `rokc`), `git`, an index checkout, and the [web 
 ./
 |-- rok/                 # toolchain (github.com/rok-lang/rok)
 |-- rokstones.io-index/  # registry index
-|-- stones/markdown/     # markdown renderer stone (path dependency)
-|-- stones/rok-syntax/   # rok / ROKON highlighter stone (path dependency)
 `-- rokstones.io/        # this repository
 ```
 
