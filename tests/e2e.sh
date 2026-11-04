@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end test of `rok run -- serve`: a temp index (bare remote +
 # checkout), a fake GitHub (tests/fake-github), logins through the OAuth
-# callback, publish tokens, the API, and the commits pushed to the index.
+# callback, publish tokens, trusted publishing with the fake's OIDC
+# tokens, the API, and the commits pushed to the index.
 #
 #   tests/e2e.sh            (needs rok, rokc, git, curl on PATH)
 #
@@ -43,6 +44,13 @@ mkdir -p "$T/site/web/assets"
 cp -R "$repo/web/assets/fonts" "$T/site/web/assets/"
 sed -e 's|^ *out: .*|    out: "public",|' "$repo/site.rokon" > "$T/site/site.rokon"
 
+cat > "$T/trusted.rokon" <<'EOF'
+// as infra writes it
+[
+    TrustedPublisher { stone: "seeded", repository: "acme/seeded", owner_id: 4242, workflow: "publish.yml" },
+]
+EOF
+
 "$repo/tests/fake-github/target/debug/fake_github" "127.0.0.1:$gh_port" test-secret &
 pids+=($!)
 
@@ -57,6 +65,8 @@ start_server() {
         ROKSTONES_INDEX="$T/index" \
         GITHUB_OAUTH_URL="http://127.0.0.1:$gh_port" \
         GITHUB_API_URL="http://127.0.0.1:$gh_port" \
+        GITHUB_OIDC_ISSUER="http://127.0.0.1:$gh_port/oidc" \
+        ROKSTONES_TRUSTED="$T/trusted.rokon" \
         GIT_CONFIG_COUNT=1 \
         GIT_CONFIG_KEY_0="url.file://$T/src/.insteadOf" \
         GIT_CONFIG_VALUE_0="https://example.invalid/" \
@@ -321,6 +331,136 @@ req POST /api/v1/stones/geom "${auth[@]}"
 expect_code 405 "stone api method"
 ok "metadata api"
 
+# Trusted publishing: a workflow's OIDC token (signed by the fake
+# issuer) traded for a short-lived token scoped to the stones that
+# trust that workflow.
+now=$(date +%s)
+# claims REPO WORKFLOW: what GitHub puts in a job's OIDC token.
+claims() {
+    printf '{"jti":"%s","sub":"repo:%s:ref:refs/tags/v1","aud":"%s","iss":"http://127.0.0.1:%s/oidc","repository":"%s","repository_owner_id":"4242","workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","job_workflow_ref":"%s/.github/workflows/%s@refs/tags/v1","iat":%s,"nbf":%s,"exp":%s}' \
+        "$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')" "$1" "${AUD:-rokstones.test}" "$gh_port" "$1" "$1" "$2" "$1" "$2" "$now" "$now" "$((now + 300))"
+}
+mint() { curl -s --data-binary "$1" "http://127.0.0.1:$gh_port/_mint"; }
+exchange() { req POST /api/v1/trusted-publishing/token --data-binary "TrustedPublishing { jwt: \"$1\" }"; }
+
+req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&repository=acme/geom&workflow=publish.yml"
+expect_code 303 "add trusted publisher"
+req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&repository=acme/geom&workflow=publish.yml"
+expect_code 409 "same trusted publisher twice"
+req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&repository=nobody/geom&workflow=publish.yml"
+expect_code 400 "unknown repository"
+expect_body "GitHub shows no public repository nobody/geom" "unknown repository body"
+req POST /me/trusted -H "Cookie: rks_session=$sess" --data "csrf=$csrf&stone=geom&repository=acme/geom&workflow=../publish.yml"
+expect_code 400 "bad workflow name"
+req POST /me/trusted -H "Cookie: rks_session=$bob_sess" --data "csrf=$bob_csrf&stone=geom&repository=acme/evil&workflow=publish.yml"
+expect_code 403 "not an owner"
+req GET /me -H "Cookie: rks_session=$sess"
+expect_body '<td>geom</td><td>acme/geom</td><td>publish.yml</td>' "trusted publisher listed"
+expect_body '<td>seeded</td><td>acme/seeded</td><td>publish.yml</td><td><span class="muted">any</span></td><td><span class="muted">server config</span>' "seeded publisher listed"
+req GET /api/v1/trusted-publishers "${auth[@]}"
+expect_code 200 "trusted publishers api"
+expect_body 'TrustedPublisher { stone: "geom", repository: "acme/geom", owner_id: 4242, workflow: "publish.yml", environment: "", id: "[0-9a-f]*", added_by: "alice"' "trusted publishers api body"
+req POST /api/v1/trusted-publishers "${auth[@]}" --data-binary 'TrustedPublisher { stone: "ge-om", repository: "acme/geom", workflow: "release.yml", environment: "release" }'
+expect_code 200 "trusted publisher api add"
+rid=$(sed -n 's/.*id: "\([0-9a-f]*\)".*/\1/p' "$T/b")
+req POST /api/v1/trusted-publishers/remove "${auth[@]}" --data-binary "Remove { id: \"$rid\" }"
+expect_code 200 "trusted publisher api remove"
+req POST /api/v1/trusted-publishers/remove "${auth[@]}" --data-binary "Remove { id: \"$rid\" }"
+expect_code 404 "removed twice"
+
+jwt=$(mint "$(claims acme/geom publish.yml)")
+exchange "$jwt"
+expect_code 200 "exchange"
+expect_body 'TrustedToken { token: "rkt_[0-9a-f]\{64\}", expires: [0-9]*, stones: \["geom"\] }' "exchange body"
+ttok=$(grep -o 'rkt_[0-9a-f]\{64\}' "$T/b")
+grep -q "$ttok" "$T/data/db.rokon" && fail "trusted token stored in clear"
+exchange "$jwt"
+expect_code 401 "replayed OIDC token"
+expect_body "exchanged already" "replay body"
+req POST /api/v1/trusted-publishing/token --data-binary "{\"jwt\": \"$(mint "$(claims acme/geom publish.yml)")\"}"
+expect_code 200 "exchange with a JSON body"
+exchange "$(mint "$(AUD=evil.example claims acme/geom publish.yml)")"
+expect_code 401 "audience"
+expect_body 'audience=rokstones.test' "audience body"
+exchange "$(mint "$(claims acme/geom other.yml)")"
+expect_code 403 "unknown workflow"
+expect_body "no stone trusts acme/geom, workflow other.yml" "unknown workflow body"
+exchange "$(mint "$(claims acme/geom publish.yml | sed 's/"4242"/"4243"/')")"
+expect_code 403 "owner id"
+exchange "${jwt%?????}AAAAA"
+expect_code 401 "bad signature"
+exchange "$(printf '{"alg":"none","kid":"e2e"}' | base64 | tr '+/' '-_' | tr -d '=\n').${jwt#*.}"
+expect_code 401 "alg none"
+exchange "$(head -c 20000 /dev/zero | tr '\0' a)"
+expect_code 413 "exchange body cap"
+
+tauth=(-H "Authorization: Bearer $ttok")
+req GET /api/v1/me "${tauth[@]}"
+expect_body 'Me { login: "github:acme/geom/.github/workflows/publish.yml@refs/tags/v1", publish: true }' "trusted me"
+req GET /api/v1/trusted-publishers "${tauth[@]}"
+expect_code 403 "trusted token manages nothing"
+req GET /api/v1/me -H "Authorization: Bearer rkt_$(printf '0%.0s' $(seq 64))"
+expect_code 401 "unknown trusted token"
+aauth=("${auth[@]}")
+auth=("${tauth[@]}")
+publish "${line//0.1.0/0.0.9}" '{ description: "Shapes" }'
+expect_code 200 "trusted publish"
+[ "$(git -C "$T/remote.git" log -1 --format='%an <%ae>')" = "acme/geom <index@rokstones.io>" ] || fail "trusted commit author"
+publish "${line//\"geom\"/\"ge-om\"}"
+expect_code 403 "trusted token scope"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.0.9" }'
+expect_code 200 "trusted yank"
+req POST /api/v1/yank "${auth[@]}" --data-binary 'Yank { name: "geom", version: "0.0.9", undo: true }'
+expect_code 200 "trusted unyank"
+req GET /api/v1/stones/geom
+expect_body 'version: "0.0.9", yanked: false, yank_message: none, deps: \[\], meta: { description: "Shapes" }, has_readme: false, downloads: 0, published_by: Actor { id: 0, login: "github:acme/geom/.github/workflows/publish.yml@refs/tags/v1"' "trusted publisher recorded"
+
+# A version committed with `rok publish --index-dir` has no metadata:
+# publishing it again from the same tree fills it in.
+srev=$(source_repo seeded lib.rok)
+stree=$(git -C "$T/src/seeded" rev-parse "HEAD^{tree}")
+sline="Stone { name: \"seeded\", version: \"0.2.0\", deps: [], source: Dep::git(\"https://example.invalid/seeded\", rev: \"$srev\"), tree: \"$stree\", yanked: false, toolchain: \"0.2\" }"
+git clone -q "$T/remote.git" "$T/pr" 2>/dev/null
+mkdir -p "$T/pr/se/ed"
+echo "$sline" > "$T/pr/se/ed/seeded"
+git -C "$T/pr" add -A
+git -C "$T/pr" -c user.name=t -c user.email=t@t commit -q -m "Publish seeded 0.2.0"
+git -C "$T/pr" push -q origin HEAD 2>/dev/null
+exchange "$(mint "$(claims acme/seeded publish.yml)")"
+expect_code 200 "exchange for a seeded publisher"
+auth=(-H "Authorization: Bearer $(grep -o 'rkt_[0-9a-f]\{64\}' "$T/b")")
+before=$(git -C "$T/remote.git" rev-parse HEAD)
+publish "$sline" '{ description: "Seeded", license: "MIT", readme_content: "# seeded\n" }'
+expect_code 200 "fill in metadata"
+expect_body 'seeded 0.2.0 was already in the index from this tree; its missing metadata is filled in' "fill in warning"
+[ "$(git -C "$T/remote.git" rev-parse HEAD)" = "$before" ] || fail "fill in committed"
+req GET /api/v1/stones/seeded
+expect_body 'meta: { description: "Seeded", license: "MIT" }, has_readme: true, downloads: 0, published_by: none' "filled in metadata"
+echo '// changed' >> "$T/src/seeded/src/lib.rok"
+git -C "$T/src/seeded" -c user.name=t -c user.email=t@t commit -q -am change
+srev2=$(git -C "$T/src/seeded" rev-parse HEAD)
+stree2=$(git -C "$T/src/seeded" rev-parse "HEAD^{tree}")
+publish "$(echo "$sline" | sed -e "s/$srev/$srev2/" -e "s/$stree/$stree2/")"
+expect_code 409 "another tree"
+expect_body "from another tree ($stree)" "another tree body"
+publish "${line//0.1.0/0.1.2}"
+expect_code 403 "seeded token scope"
+auth=("${aauth[@]}")
+publish "${line//0.1.0/0.0.9}"
+expect_code 409 "published through the API is taken"
+
+req GET /me -H "Cookie: rks_session=$sess"
+pid=$(sed -n 's|.*action="/me/trusted/\([0-9a-f]*\)/remove".*|\1|p' "$T/b" | head -1)
+[ -n "$pid" ] || fail "no remove form"
+req POST "/me/trusted/$pid/remove" -H "Cookie: rks_session=$sess" --data "csrf=$csrf"
+expect_code 303 "remove trusted publisher"
+exchange "$(mint "$(claims acme/geom publish.yml)")"
+expect_code 403 "removed publisher"
+sid=$(grep -o 'seed-[0-9a-f]*' "$T/data/db.rokon" | head -1)
+req POST "/me/trusted/$sid/remove" -H "Cookie: rks_session=$sess" --data "csrf=$csrf"
+expect_code 400 "seeded publisher stays"
+ok "trusted publishing"
+
 # A rejected push: 503, and the checkout back at the remote's state.
 printf '#!/bin/sh\nexit 1\n' > "$T/remote.git/hooks/pre-receive"
 chmod +x "$T/remote.git/hooks/pre-receive"
@@ -338,6 +478,13 @@ req GET /stones/geom
 expect_code 200 "stone page after publish"
 expect_body '<dt>Owner</dt><dd><a href="https://github.com/alice">alice</a></dd>' "owners on the page"
 expect_body 'by <a href="https://github.com/alice">alice</a>' "publisher on the page"
+for _ in $(seq 50); do
+    req GET /stones/geom/versions
+    grep -q '(trusted publishing)' "$T/b" && break
+    sleep 0.2
+done
+expect_body '<a href="https://github.com/acme/geom/actions/workflows/publish.yml" title="acme/geom/.github/workflows/publish.yml@refs/tags/v1">acme/geom</a> <span class="muted">(trusted publishing)</span>' "trusted publisher on the versions page"
+req GET /stones/geom
 expect_body '<dt>Category</dt><dd>mathematics</dd>' "categories on the page"
 expect_body '<p>Shapes, <strong>fast</strong>.</p>' "published README rendered"
 req GET /stones/geom/dependencies
@@ -387,4 +534,5 @@ ok "revoke and logout"
 
 grep -q "code=" "$T/server.log" && fail "OAuth code in the log"
 grep -q "test-secret\|gho_" "$T/server.log" && fail "secret in the log"
+grep -q "rkt_\|eyJ" "$T/server.log" && fail "trusted token or OIDC token in the log"
 echo "all e2e checks passed"

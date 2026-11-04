@@ -1,0 +1,417 @@
+// Trusted publishing: a GitHub Actions job's OIDC token (a JWT GitHub
+// signs with RS256) is traded for a short-lived publish token scoped to
+// the stones whose trusted publishers match its claims.
+
+use rok::std::fs;
+use rok::std::rokon;
+use rok::core::crypto::HashAlgorithm;
+use rok::core::crypto::rsa::PublicKey;
+use rok::core::encoding::base64;
+use pkg::index;
+use pkg::index::ApiError;
+use pkg::json;
+use pkg::secret;
+use pkg::stones;
+
+pub const GITHUB_ISSUER: str = "https://token.actions.githubusercontent.com";
+/// Seconds a clock may be off.
+pub const LEEWAY: i64 = 60i64;
+/// Seconds an exchanged token lasts.
+pub const TOKEN_SECS: i64 = 1800i64;
+/// GitHub's tokens are about 1 KiB.
+pub const MAX_JWT: usize = 8192;
+/// Trusted publishers per stone.
+pub const MAX_PER_STONE: usize = 16;
+
+/// A workflow that may publish `stone`.
+#[derive(Rokon)]
+#[rokon(deny_unknown_fields)]
+pub struct TrustedPublisher {
+    pub stone: str;
+    /// `owner/repo` on GitHub.
+    pub repository: str;
+    /// GitHub's numeric id of the repository's owner, so a deleted and
+    /// re-registered owner name does not match; 0: not checked.
+    pub owner_id: i64 = 0i64;
+    /// File name under `.github/workflows/`.
+    pub workflow: str;
+    /// The GitHub environment the job must run in; "": any.
+    pub environment: str = "";
+    pub id: str = "";
+    /// The login that added it; "" for the bootstrap file.
+    pub added_by: str = "";
+    pub added: i64 = 0i64;
+    /// From ROKSTONES_TRUSTED: replaced at each start, removed only there.
+    pub seeded: bool = false;
+}
+
+/// An exchanged token, stored as SHA-256.
+#[derive(Rokon)]
+pub struct TrustToken {
+    pub hash: str;
+    /// `index::key` of each stone it may publish and yank.
+    pub stones: List<str>;
+    /// `github:<workflow_ref>`, recorded as the publisher.
+    pub publisher: str;
+    pub repository: str;
+    /// The OIDC token's `jti`: it is traded once.
+    pub jti: str;
+    pub created: i64;
+    pub expires: i64;
+    /// When the OIDC token expires: the record outlives it for the jti check.
+    pub jwt_expires: i64;
+}
+
+/// Whether the record is still needed: a live token or a jti to refuse.
+pub fn live(t: TrustToken, now: i64) -> bool { t.expires > now || t.jwt_expires + LEEWAY > now }
+
+/// The token `t` (`rkt_` + 64 hex) while it lasts.
+pub fn token_of(tokens: List<TrustToken>, t: str, now: i64) -> TrustToken | none {
+    if !t.starts_with("rkt_") || t.len() != 68 { return none; }
+    let h = secret::sha256_hex(t);
+    let found: TrustToken | none = none;
+    for k in tokens {
+        if secret::same(k.hash, h) && k.expires > now { found = k; }
+    }
+    found
+}
+
+fn unauthorized(msg: str) -> ApiError { index::err(401, msg) }
+
+/// A JWT split up; `signed` is `header.payload`, what the signature covers.
+pub struct Jwt {
+    pub header: Dict<str, str>;
+    pub claims: Dict<str, str>;
+    pub signed: str;
+    pub sig: List<u8>;
+}
+
+fn b64(part: str, what: str) throws (ApiError) -> List<u8> {
+    try base64::decode(part, base64::URL_SAFE_NO_PAD) catch _ { throw index::err(400, f"the OIDC token's {what} is not base64url"); }
+}
+
+/// A JSON object of scalars; a key given twice is refused, so no two
+/// readers can see different claims.
+fn object(b: List<u8>, what: str) throws (ApiError) -> Dict<str, str> {
+    let text = try str::from_utf8(b) catch _ { throw index::err(400, f"the OIDC token's {what} is not UTF-8"); };
+    if !text.trim().starts_with("{") { throw index::err(400, f"the OIDC token's {what} is not a JSON object"); }
+    let seen: Set<str> = Set::new();
+    for (k, _, _) in json::members(text) {
+        if seen.contains(k) { throw index::err(400, f"the OIDC token's {what} has `{k}` twice"); }
+        seen.insert(k);
+    }
+    json::fields(text)
+}
+
+/// `t` as a JWT; anything but RS256 is refused before a key is looked up.
+pub fn parse_jwt(t: str) throws (ApiError) -> Jwt {
+    if t.is_empty() || t.len() > MAX_JWT { throw index::err(400, "`jwt` is the OIDC token of a GitHub Actions job"); }
+    let parts: List<str> = List::new();
+    for p in t.split(".") { parts.push(p); }
+    if parts.len() != 3 || parts[0].is_empty() || parts[1].is_empty() || parts[2].is_empty() {
+        throw index::err(400, "`jwt` is not a JWT (header.payload.signature)");
+    }
+    let header = try object(try b64(parts[0], "header"), "header");
+    let alg = header.get("alg") ?? "";
+    if alg != "RS256" { throw unauthorized(f"the OIDC token is signed with `{alg}`; only RS256 is taken"); }
+    let typ = header.get("typ") ?? "JWT";
+    if typ != "JWT" { throw unauthorized(f"the OIDC token's type is `{typ}`, not JWT"); }
+    if (header.get("kid") ?? "").is_empty() { throw unauthorized("the OIDC token names no key (`kid`)"); }
+    let claims = try object(try b64(parts[1], "payload"), "payload");
+    let sig = try b64(parts[2], "signature");
+    Jwt { header: header, claims: claims, signed: parts[0] + "." + parts[1], sig: sig }
+}
+
+/// The RS256 signing key `kid` of a JWKS document.
+pub fn find_key(jwks: str, kid: str) -> PublicKey | none {
+    let keys = json::member(jwks, "keys") ?? { return none; };
+    for k in json::items(keys) {
+        let f = json::fields(k);
+        if (f.get("kid") ?? "") != kid || (f.get("kty") ?? "") != "RSA" { continue; }
+        if (f.get("alg") ?? "RS256") != "RS256" || (f.get("use") ?? "sig") != "sig" { continue; }
+        let n = try base64::decode(f.get("n") ?? "", base64::URL_SAFE_NO_PAD) catch _ { continue; };
+        let e = try base64::decode(f.get("e") ?? "", base64::URL_SAFE_NO_PAD) catch _ { continue; };
+        return try PublicKey::new(n, e) catch _ { continue; };
+    }
+    none
+}
+
+fn time_claim(c: Dict<str, str>, k: str) throws (ApiError) -> i64 | none {
+    let v = c.get(k) ?? { return none; };
+    try v.parse::<i64>() catch _ { throw unauthorized(f"the OIDC token's `{k}` is not a time"); }
+}
+
+/// Check `j`'s signature with `key`, its issuer, audience and times.
+pub fn check(j: Jwt, key: PublicKey, issuer: str, audience: str, now: i64) throws (ApiError) {
+    if (j.header.get("alg") ?? "") != "RS256" { throw unauthorized("only RS256 is taken"); }
+    if !key.verify_pkcs1v15(HashAlgorithm::Sha256, j.signed, j.sig) { throw unauthorized("the OIDC token's signature does not verify"); }
+    let c = j.claims;
+    if (c.get("iss") ?? "") != issuer { throw unauthorized(f"the OIDC token is not from {issuer}"); }
+    let aud = c.get("aud") ?? "";
+    if aud != audience { throw unauthorized(f"the OIDC token's audience is `{aud}`; request it with `audience={audience}`"); }
+    let exp = (try time_claim(c, "exp")) ?? { throw unauthorized("the OIDC token has no `exp`"); };
+    let iat = (try time_claim(c, "iat")) ?? { throw unauthorized("the OIDC token has no `iat`"); };
+    if now > exp + LEEWAY { throw unauthorized("the OIDC token expired; request a new one"); }
+    if iat > now + LEEWAY { throw unauthorized("the OIDC token was issued in the future; check the server's clock"); }
+    if let nbf: i64 = try time_claim(c, "nbf") {
+        if nbf > now + LEEWAY { throw unauthorized("the OIDC token is not valid yet"); }
+    }
+    for k in ["jti", "repository", "repository_owner_id", "workflow_ref"] {
+        if (c.get(k) ?? "").is_empty() { throw unauthorized(f"the OIDC token has no `{k}`; it is not from a GitHub Actions job"); }
+    }
+}
+
+/// Whether the claims of a checked token are publisher `p`'s: same
+/// repository (and owner id), its workflow file (any ref), and its
+/// environment when it names one.
+pub fn matches(p: TrustedPublisher, c: Dict<str, str>) -> bool {
+    let repo = c.get("repository") ?? "";
+    if !is_repo(repo) || repo.to_lowercase() != p.repository.to_lowercase() { return false; }
+    if p.owner_id != 0i64 && (c.get("repository_owner_id") ?? "") != f"{p.owner_id}" { return false; }
+    // `owner/repo/.github/workflows/<file>@<ref>`: the caller's, not a
+    // reusable workflow's (that is `job_workflow_ref`).
+    let wref = c.get("workflow_ref") ?? "";
+    if !wref.to_lowercase().starts_with(repo.to_lowercase() + "/") { return false; }
+    if !wref[repo.len() + 1:].starts_with(".github/workflows/" + p.workflow + "@") { return false; }
+    if !p.environment.is_empty() && (c.get("environment") ?? "").to_lowercase() != p.environment.to_lowercase() { return false; }
+    true
+}
+
+fn is_gh_name(x: str, most: usize) -> bool {
+    if x.is_empty() || x.len() > most || x == "." || x == ".." { return false; }
+    for ch in x.chars() {
+        if !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.') { return false; }
+    }
+    true
+}
+
+/// `owner/repo`, in GitHub's name characters.
+pub fn is_repo(s: str) -> bool {
+    let (o, r) = s.split_once("/") ?? { return false; };
+    is_gh_name(o, 39usize) && is_gh_name(r, 100usize)
+}
+
+/// A workflow file name: `publish.yml`.
+pub fn is_workflow(s: str) -> bool {
+    if !(s.ends_with(".yml") || s.ends_with(".yaml")) || s.starts_with(".") { return false; }
+    is_gh_name(s, 255usize)
+}
+
+/// Refuse a publisher that could never match, or match too much.
+pub fn check_publisher(p: TrustedPublisher) throws (ApiError) {
+    if !stones::is_name(p.stone) { throw index::err(400, f"`{p.stone}` is not a stone name"); }
+    if !is_repo(p.repository) { throw index::err(400, f"`{p.repository}` is not a GitHub repository; write `owner/repo`"); }
+    if !is_workflow(p.workflow) { throw index::err(400, f"`{p.workflow}` is not a workflow file name; write the file's name under .github/workflows, e.g. `publish.yml`"); }
+    if p.environment.len() > 255 || p.environment.trim() != p.environment { throw index::err(400, "an environment name is at most 255 bytes, with no spaces around it"); }
+    for ch in p.environment.chars() {
+        if (ch as u32) < 0x20u32 { throw index::err(400, "an environment name has no control characters"); }
+    }
+    if p.owner_id < 0i64 { throw index::err(400, "`owner_id` is GitHub's numeric id of the owner"); }
+}
+
+/// The same workflow for the same stone.
+pub fn same(a: TrustedPublisher, b: TrustedPublisher) -> bool {
+    index::key(a.stone) == index::key(b.stone) && a.repository.to_lowercase() == b.repository.to_lowercase() && a.workflow == b.workflow && a.environment.to_lowercase() == b.environment.to_lowercase()
+}
+
+/// The bootstrap file: `[TrustedPublisher { stone, repository, owner_id,
+/// workflow, environment }, ..]`, each checked and marked `seeded`.
+pub fn read_seeds(path: str) throws -> List<TrustedPublisher> {
+    let list: List<TrustedPublisher> = try rokon::from_str(try fs::read_to_str(path));
+    for i in 0..list.len() {
+        try check_publisher(list[i]) catch e { throw index::err(0, f"{path}: {e.msg}"); };
+        if !list[i].id.is_empty() || !list[i].added_by.is_empty() || list[i].added != 0i64 || list[i].seeded {
+            throw index::err(0, f"{path}: give `stone`, `repository`, `owner_id`, `workflow` and `environment` only");
+        }
+        let p = list[i];
+        list[i].id = "seed-" + secret::sha256_hex(f"{index::key(p.stone)}\n{p.repository.to_lowercase()}\n{p.workflow}\n{p.environment}")[:12];
+        list[i].seeded = true;
+    }
+    list
+}
+
+/// `kept` without its seeded publishers, then `seeds`.
+pub fn merge_seeds(kept: List<TrustedPublisher>, seeds: List<TrustedPublisher>) -> List<TrustedPublisher> {
+    let out: List<TrustedPublisher> = List::new();
+    for p in kept {
+        if !p.seeded { out.push(p); }
+    }
+    for s in seeds { out.push(s); }
+    out
+}
+
+/// The stones (`index::key`) whose publishers match checked claims `c`.
+pub fn grant(all: List<TrustedPublisher>, c: Dict<str, str>) -> List<str> {
+    let out: List<str> = List::new();
+    for p in all {
+        let k = index::key(p.stone);
+        if matches(p, c) && !out.contains(k) { out.push(k); }
+    }
+    out
+}
+
+#[cfg(test)]
+fn expect(ok: bool, what: str) {
+    if !ok { panic(what); }
+}
+
+// A 2048-bit key made for these tests only (PKCS #1 DER, hex).
+#[cfg(test)]
+fn test_key() -> rok::core::crypto::rsa::PrivateKey {
+    let h = "308204a50201000282010100cb1af876ed3fd7c61ad01042ffe1aba7c0702c0fb460894023fa48671f64a882ab4c14fe"
+        + "a723ea93e10b260348c392515ee68d987cc4863cc4b3c60c449a38a2f27c5ef0ba13ad46b510378a29a1ad27fc50886c"
+        + "601bb313a106242b86a4e8832588f73e0bad3bf1a62a0a4a53348f11a6e3f2a153b2a2fc1e5682ce77ffbd45a8c9808d"
+        + "e751428b7c9da37575d8320f115bd7749070b98478e496894d0962a21da3e9c7545c9d4cf313e85b0cf5af953e02e719"
+        + "7b850d31b6f3e2c93e9d762ea8f2802b8fcf3add6a5ee84b7a1941f5fe1bde4df33883907dc137d5265dc7500df4bb29"
+        + "925d4db5a0f67762298bfccfc1b727ced2f44145bfd4b7b12b6adf4b02030100010282010100aebbaf52b15da186df7e"
+        + "6cdf1740d0eaeb1615f214de9075cbfe00d8271bf41526c5b7b2359d22acc28952d4b47efc9c60a6bcde994881ac3a15"
+        + "e7a69a468bbf341a679b769a831237a792009d3c68b9e3ca6cf3bfe354b6e86b5e26cc1987a77c5d4f47e3c7cfb05fa1"
+        + "ff645e1cf390de217195f569d3ea4f376225bafb1b9b0f66ee2bd5c8bbccdcb1d847721b6cc1f6d420179f0eda957026"
+        + "d265f5a3f7d1ac15a4ffde29c8a88cbb15ee323ef267892579a0578f8ba67f3294514b4318d03961939ba27a97bb3fe9"
+        + "f606750212fc966a28496848610facd9ced6d3ab9dd1e32e28fb4ea005080c500348aa458274756143bd5c87b68b6618"
+        + "590345fcd90102818100f09c6abefeed5fff40865e9fbfcc291820deb759eed572b980d1a53c5668d8220baf9e9f3748"
+        + "7e8f7d14f3ca9f15d2d6f81422ac24a5b933139002c843e95e598a220925eb7d5d53d1559d4db0c1cd731d3ebb7ba618"
+        + "7b816efd11e49b3d99b9e45427e26b508cc52714456c7599f71c2ae8a5fd10e8cea124a09b91756d46c102818100d818"
+        + "76e134bd6a61c527ac75d798d6f7c6d7e28bb1472e0975e5df1ba7632cb6d8bd11504149286fde074c35130d12bc7583"
+        + "176675af364126ee6cb8e34a86f31acad933097642beb6b2b99156694347d645a77592d021aaafcf382034f474aeebf5"
+        + "63ea10de42ce2041339509e2e888a56d9e2622f8310048c4a7a066ab150b0281806535765556c8249c2ad91a8e59d017"
+        + "ed154e799373ba0722ee83c0dc6b80788181a6e2b3183eff357e28c50f92f14c19ae8a51b75546fc6af6ac99ef0159f5"
+        + "9cf654b0c26996f71dddad0498fc63d8f6b5f3804b57a76eb4182a8d4f3ad9a38324ff1d33c96e3d7864a2cb3cff0ebf"
+        + "79f2b69fb39e5c3f265b50cf7f55049d4102818100a3c396840135f2e2f948a1b804957d83f51b32426f2ce444a3267b"
+        + "b837583f50aa5c4e3ca5dd4d59c9c77a0756d2b77a3f0c03b5d045e235e9cd1273e33c5d9cea9703975bfa5586b66a27"
+        + "9b6f0302cbf424814de6def844a44bc3db148695cee25eeb433d595303670a428f1618f1e46c89f02a32a2287070b527"
+        + "dbb532be1502818100ccbf42b0b21d327f37bcec58c29b0885dfa527ba798eb4424c52c87b127592a13620cf905ec265"
+        + "458afc341f073b1b146ab0deb74b00d1351bfed33508ff529d8869175fe434ad5baebedcc3cf88bd0318551a8b29a742"
+        + "ee32c3072655d21518d2839850d1e3e01abccaa3371b7c50e677928dd887d7ca5e73feb316361d45ca";
+    try! rok::core::crypto::rsa::PrivateKey::from_pkcs1_der(try! rok::core::encoding::hex::decode(h))
+}
+
+#[cfg(test)]
+fn jwks_of(kid: str) -> str {
+    let k = test_key().public_key();
+    let n = base64::encode(k.modulus(), base64::URL_SAFE_NO_PAD);
+    let e = base64::encode(k.exponent(), base64::URL_SAFE_NO_PAD);
+    f"{{\"keys\":[{{\"kty\":\"RSA\",\"alg\":\"RS256\",\"use\":\"sig\",\"kid\":\"other\",\"n\":\"{n}\",\"e\":\"AQAB\",\"x\":[1]}},{{\"n\":\"{n}\",\"kty\":\"RSA\",\"kid\":\"{kid}\",\"e\":\"{e}\",\"use\":\"sig\",\"alg\":\"RS256\"}}]}}"
+}
+
+#[cfg(test)]
+fn sign(header: str, claims: str) -> str {
+    let h = base64::encode(header, base64::URL_SAFE_NO_PAD);
+    let c = base64::encode(claims, base64::URL_SAFE_NO_PAD);
+    let s = try! test_key().sign_pkcs1v15(HashAlgorithm::Sha256, h + "." + c);
+    h + "." + c + "." + base64::encode(s, base64::URL_SAFE_NO_PAD)
+}
+
+#[cfg(test)]
+const NOW: i64 = 1800000000i64;
+
+#[cfg(test)]
+fn claims(more: str) -> str {
+    f"{{\"jti\":\"j-1\",\"sub\":\"repo:acme/geom:ref:refs/tags/v1.0.0\",\"aud\":\"rokstones.io\",\"ref\":\"refs/tags/v1.0.0\",\"repository\":\"acme/geom\",\"repository_owner\":\"acme\",\"repository_owner_id\":\"42\",\"workflow_ref\":\"acme/geom/.github/workflows/publish.yml@refs/tags/v1.0.0\",\"job_workflow_ref\":\"acme/ci/.github/workflows/rok.yml@refs/heads/main\",\"environment\":\"Release\",\"iss\":\"{GITHUB_ISSUER}\",\"nbf\":{NOW - 10i64},\"iat\":{NOW - 10i64},\"exp\":{NOW + 290i64}{more}}}"
+}
+
+#[cfg(test)]
+const HEADER: str = "{\"typ\":\"JWT\",\"alg\":\"RS256\",\"x5t\":\"x\",\"kid\":\"k1\"}";
+
+#[cfg(test)]
+fn verdict(jwt: str, jwks: str, aud: str, now: i64) -> str {
+    let j = try parse_jwt(jwt) catch e { return f"{e.status} {e.msg}"; };
+    let key = find_key(jwks, j.header.get("kid") ?? "") ?? { return "no key"; };
+    try check(j, key, GITHUB_ISSUER, aud, now) catch e { return f"{e.status} {e.msg}"; };
+    "ok"
+}
+
+#[test]
+fn oidc_tokens() {
+    let jwks = jwks_of("k1");
+    let good = sign(HEADER, claims(""));
+    let v = verdict(good, jwks, "rokstones.io", NOW);
+    expect(v == "ok", v);
+    let j = try! parse_jwt(good);
+    expect(j.claims["repository"] == "acme/geom" && j.claims["exp"] == f"{NOW + 290i64}", "claims");
+    expect(find_key(jwks, "nope") is none && find_key("{}", "k1") is none && find_key("{\"keys\":[{\"kid\":\"k1\",\"kty\":\"RSA\",\"alg\":\"RS512\"}]}", "k1") is none, "keys");
+    expect(verdict(good, jwks_of("k2"), "rokstones.io", NOW) == "no key", "unknown kid");
+    v = verdict(good, jwks, "evil.example", NOW);
+    expect(v == "401 the OIDC token's audience is `rokstones.io`; request it with `audience=evil.example`", v);
+    expect(verdict(good, jwks, "rokstones.io", NOW + 290i64 + LEEWAY) == "ok", "leeway");
+    expect(verdict(good, jwks, "rokstones.io", NOW + 291i64 + LEEWAY).contains("expired"), "expired");
+    expect(verdict(good, jwks, "rokstones.io", NOW - 100i64).contains("future"), "iat");
+    expect(verdict(sign(HEADER, claims(",\"nbf\":1900000000")), jwks, "rokstones.io", NOW).contains("twice"), "duplicate claim");
+    let later = claims("").replace(f"\"nbf\":{NOW - 10i64}", f"\"nbf\":{NOW + 100i64}");
+    expect(verdict(sign(HEADER, later), jwks, "rokstones.io", NOW).contains("not valid yet"), "nbf");
+    let other = claims("").replace(GITHUB_ISSUER, "https://evil.example");
+    expect(verdict(sign(HEADER, other), jwks, "rokstones.io", NOW).contains("is not from"), "issuer");
+    expect(verdict(sign(HEADER, claims("").replace("\"jti\":\"j-1\",", "")), jwks, "rokstones.io", NOW).contains("no `jti`"), "jti");
+    // A signature over other claims.
+    let parts: List<str> = List::new();
+    for p in good.split(".") { parts.push(p); }
+    let forged = parts[0] + "." + base64::encode(claims("").replace("acme/geom", "acme/evil"), base64::URL_SAFE_NO_PAD) + "." + parts[2];
+    expect(verdict(forged, jwks, "rokstones.io", NOW).contains("does not verify"), "forged");
+    expect(verdict(parts[0] + "." + parts[1] + ".AAAA", jwks, "rokstones.io", NOW).contains("does not verify"), "short signature");
+    // `none`, HMAC keyed with the public key, no kid, another type.
+    for h in ["{\"alg\":\"none\",\"kid\":\"k1\"}", "{\"alg\":\"HS256\",\"kid\":\"k1\"}", "{\"alg\":\"RS256\"}", "{\"alg\":\"RS256\",\"kid\":\"k1\",\"typ\":\"at+jwt\"}"] {
+        let t = base64::encode(h, base64::URL_SAFE_NO_PAD) + "." + parts[1] + "." + parts[2];
+        expect(verdict(t, jwks, "rokstones.io", NOW).starts_with("401 "), h);
+    }
+    for t in ["", "a.b", "a.b.c.d", "a..c", parts[0] + "." + parts[1] + ".a+b/", "x".repeat(MAX_JWT + 1)] {
+        expect(verdict(t, jwks, "rokstones.io", NOW).starts_with("400 "), t);
+    }
+}
+
+#[cfg(test)]
+fn publisher(stone: str, repo: str, workflow: str, env: str) -> TrustedPublisher {
+    TrustedPublisher { stone: stone, repository: repo, owner_id: 42i64, workflow: workflow, environment: env }
+}
+
+#[test]
+fn claim_matching() {
+    let c = (try! parse_jwt(sign(HEADER, claims("")))).claims;
+    expect(matches(publisher("geom", "acme/geom", "publish.yml", ""), c), "plain");
+    expect(matches(publisher("geom", "ACME/Geom", "publish.yml", "release"), c), "case of repo and environment");
+    expect(!matches(publisher("geom", "acme/geom", "rok.yml", ""), c), "reusable workflow is not the caller");
+    expect(!matches(publisher("geom", "acme/geom", "Publish.yml", ""), c), "workflow file case");
+    expect(!matches(publisher("geom", "acme/geom", "publish.y", ""), c), "workflow prefix");
+    expect(!matches(publisher("geom", "acme/geo", "publish.yml", ""), c), "repo prefix");
+    expect(!matches(publisher("geom", "acme/geom", "publish.yml", "staging"), c), "environment");
+    let p = publisher("geom", "acme/geom", "publish.yml", "");
+    p.owner_id = 43i64;
+    expect(!matches(p, c), "owner id");
+    p.owner_id = 0i64;
+    expect(matches(p, c), "owner id unchecked");
+    let all = [publisher("geom", "acme/geom", "publish.yml", ""), publisher("Ge-om", "acme/geom", "publish.yml", "release"), publisher("other", "acme/other", "publish.yml", "")];
+    let g = grant(all, c);
+    expect(g.len() == 2 && g.contains("geom") && g.contains("ge_om") && !g.contains("other"), f"{g:?}");
+    expect(is_repo("rok-lang/rok-syntax") && !is_repo("rok-lang") && !is_repo("a/b/c") && !is_repo("a/..") && !is_repo("a b/c"), "repos");
+    expect(is_workflow("publish.yml") && is_workflow("release.yaml") && !is_workflow("a/b.yml") && !is_workflow("publish") && !is_workflow(".yml"), "workflows");
+    let status = 0;
+    try check_publisher(publisher("geom", "acme/geom", "../x.yml", "")) catch e { status = e.status; };
+    expect(status == 400, "bad workflow");
+}
+
+#[test]
+fn tokens_and_seeds() {
+    let t = "rkt_" + "cd".repeat(32);
+    let rec = TrustToken { hash: secret::sha256_hex(t), stones: ["geom"], publisher: "github:x", repository: "acme/geom", jti: "j", created: NOW, expires: NOW + TOKEN_SECS, jwt_expires: NOW + 300i64 };
+    expect(token_of([rec], t, NOW) is TrustToken && token_of([rec], t, NOW + TOKEN_SECS) is none, "expiry");
+    expect(token_of([rec], "rks_" + "cd".repeat(32), NOW) is none && token_of([rec], t.replace("rkt_c", "rkt_d"), NOW) is none, "lookup");
+    expect(live(rec, NOW + TOKEN_SECS - 1i64) && !live(rec, NOW + TOKEN_SECS + 1i64), "pruning");
+    let dir = f"{tmp()}/rokstones-trust-{try! secret::random_hex(4)}";
+    try! fs::create_dir_all(dir);
+    let path = dir + "/trusted.rokon";
+    try! fs::write(path, "[\n    TrustedPublisher { stone: \"json\", repository: \"rok-lang/json\", owner_id: 341800840, workflow: \"publish.yml\" },\n]\n");
+    let seeds = try read_seeds(path) catch e { panic(f"{e}"); };
+    expect(seeds.len() == 1 && seeds[0].seeded && seeds[0].id.starts_with("seed-") && seeds[0].owner_id == 341800840i64, "seed");
+    let kept = merge_seeds([publisher("geom", "acme/geom", "publish.yml", ""), seeds[0]], seeds);
+    expect(kept.len() == 2 && !kept[0].seeded && kept[1].seeded, "merge");
+    try! fs::write(path, "[TrustedPublisher { stone: \"json\", repository: \"rok-lang/json\", workflow: \"publish.yml\", enviroment: \"x\" }]");
+    expect((try read_seeds(path) catch _ { List::<TrustedPublisher>::new() }).is_empty(), "typo refused");
+    try! fs::write(path, "[TrustedPublisher { stone: \"json\", repository: \"rok-lang/json\", workflow: \"publish.yml\", seeded: true }]");
+    expect((try read_seeds(path) catch _ { List::<TrustedPublisher>::new() }).is_empty(), "the server's own fields refused");
+    try! fs::remove_dir_all(dir);
+}
+
+#[cfg(test)]
+fn tmp() -> str {
+    let t = try rok::std::env::var("TMPDIR") catch _ { "/tmp" };
+    t.strip_suffix("/") ?? t
+}

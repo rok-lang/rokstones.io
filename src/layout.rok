@@ -630,8 +630,20 @@ fn install_box(s: Stone, id: str) -> str {
 </div>"
 }
 
-/// A GitHub login, linked to its profile.
-fn login_link(login: str) -> str { f"<a href=\"https://github.com/{esc(http::pct_encode(login))}\">{esc(login)}</a>" }
+/// A GitHub login, linked to its profile; a trusted publisher
+/// (`github:owner/repo/.github/workflows/<file>@<ref>`), to its workflow.
+pub fn login_link(login: str) -> str {
+    if let w: str = login.strip_prefix("github:") {
+        let path = (w.split_once("@") ?? (w, "")).0;
+        if let (repo, file) = path.split_once("/.github/workflows/") ?? ("", "") {
+            if !repo.is_empty() {
+                return f"<a href=\"https://github.com/{esc(repo)}/actions/workflows/{esc(http::pct_encode(file))}\" title=\"{esc(w)}\">{esc(repo)}</a> <span class=\"muted\">(trusted publishing)</span>";
+            }
+        }
+        return esc(w);
+    }
+    f"<a href=\"https://github.com/{esc(http::pct_encode(login))}\">{esc(login)}</a>"
+}
 
 fn side(site: Site, s: Stone) -> str {
     let l = s.latest;

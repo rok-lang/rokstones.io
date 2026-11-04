@@ -705,6 +705,18 @@ pub fn lines_for(dir: str, native: bool, name: str) throws (ApiError) -> List<Di
     out
 }
 
+/// The `tree` of the line of `name` `version` in the checkout ("" when
+/// it has none, as a native package's); none when there is no such line.
+pub fn tree_at(dir: str, native: bool, name: str, version: str) throws (ApiError) -> str | none {
+    for f in try lines_for(dir, native, name) {
+        let v = if let Value::Str(x) = f.get("version") ?? Value::None { x } else { "" };
+        if is_version(v) && stones::cmp_vers(v, version) == Ordering::Equal {
+            return if let Value::Str(t) = f.get("tree") ?? Value::None { t } else { "" };
+        }
+    }
+    none
+}
+
 /// Fail when the checkout has `name` spelled another way (`a-b` / `a_b`).
 fn taken(dir: str, native: bool, name: str) throws (ApiError) {
     for f in (try git(dir, ["ls-files"], 500)).split("\n") {

@@ -1,5 +1,6 @@
-// `serve`: the site in `public/`, GitHub login, publish tokens and the
-// publish / yank API over plain HTTP (TLS ends at a reverse proxy).
+// `serve`: the site in `public/`, GitHub login, publish tokens, trusted
+// publishing and the publish / yank API over plain HTTP (TLS ends at a
+// reverse proxy).
 //
 // One thread per connection. Everything that reads or writes the data
 // file or the index holds `LOCK`, so writes are serialized. After an
@@ -27,14 +28,22 @@ use pkg::stones;
 use pkg::secret;
 use pkg::meta;
 use pkg::meta::{Release, Actor};
+use pkg::json;
+use pkg::trust;
+use pkg::trust::{TrustedPublisher, TrustToken};
+use rok::core::crypto::rsa::PublicKey;
 
 static LOCK: Mutex<i32> = Mutex::new(0);
 static STALE: Atomic<i32> = Atomic::new(0);
 static ACTIVE: Atomic<i32> = Atomic::new(0);
+/// When the issuer's keys were last fetched (unix seconds).
+static JWKS_AT: Atomic<i64> = Atomic::new(0i64);
 
 const MAX_CONNS: i32 = 256;
 const SESSION_SECS: i64 = 2592000;
 const MAX_TOKENS: usize = 20;
+/// The body of a token exchange; GitHub's OIDC tokens are about 1 KiB.
+const MAX_EXCHANGE: usize = 16384;
 
 /// Settings from the environment, then `.env`.
 pub struct Cfg {
@@ -49,6 +58,13 @@ pub struct Cfg {
     pub index: str;
     pub oauth: str;
     pub api: str;
+    /// The `aud` an OIDC token must carry: ROKSTONES_AUDIENCE, else the
+    /// host of `url`.
+    pub audience: str = "";
+    /// The OIDC issuer, no trailing `/`; tests point it at a fake.
+    pub issuer: str = trust::GITHUB_ISSUER;
+    /// ROKSTONES_TRUSTED: the bootstrap file of trusted publishers; "": none.
+    pub trusted: str = "";
 }
 
 /// `KEY=value` lines; `#` comments, blank lines, `export ` and one pair
@@ -77,6 +93,15 @@ fn setting(file: Dict<str, str>, k: str, dflt: str) throws -> str {
     v
 }
 
+fn optional(file: Dict<str, str>, k: str) -> str { try env::var(k) catch _ { file.get(k) ?? "" } }
+
+/// `rokstones.io` of `https://rokstones.io:443/x`.
+pub fn host_of(url: str) -> str {
+    let rest = url.split_once("://") ?? ("", url);
+    let h = (rest.1.split_once("/") ?? (rest.1, "")).0;
+    (h.split_once(":") ?? (h, "")).0.to_lowercase()
+}
+
 pub fn load_cfg(path: str) throws -> Cfg {
     let text = if fs::exists(path) { try fs::read_to_str(path) } else { "" };
     let f = parse_env(text);
@@ -87,6 +112,9 @@ pub fn load_cfg(path: str) throws -> Cfg {
         if !t.is_empty() { admins.push_str(t + ","); }
     }
     let url = try setting(f, "ROKSTONES_URL", "");
+    let aud = optional(f, "ROKSTONES_AUDIENCE");
+    let issuer = optional(f, "GITHUB_OIDC_ISSUER");
+    if issuer.is_empty() { issuer = trust::GITHUB_ISSUER; }
     Cfg {
         url: url.strip_suffix("/") ?? url,
         addr: try setting(f, "ROKSTONES_ADDR", "127.0.0.1:8080"),
@@ -97,6 +125,9 @@ pub fn load_cfg(path: str) throws -> Cfg {
         index: try setting(f, "ROKSTONES_INDEX", ""),
         oauth: try setting(f, "GITHUB_OAUTH_URL", "https://github.com"),
         api: try setting(f, "GITHUB_API_URL", "https://api.github.com"),
+        audience: if aud.is_empty() { host_of(url) } else { aud },
+        issuer: issuer.strip_suffix("/") ?? issuer,
+        trusted: optional(f, "ROKSTONES_TRUSTED"),
     }
 }
 
@@ -149,6 +180,10 @@ pub struct Db {
     /// Every version published, yanked or unyanked through the API, and
     /// the metadata of versions from before it (migrate-index).
     pub releases: List<Release> = List::new();
+    /// Workflows that may trade an OIDC token for a publish token.
+    pub trusted: List<TrustedPublisher> = List::new();
+    /// Tokens traded for OIDC tokens, until they and their OIDC token expire.
+    pub trust_tokens: List<TrustToken> = List::new();
 }
 
 fn load_db(cfg: Cfg) throws -> Db { try read_db(cfg.data) }
@@ -180,6 +215,11 @@ fn save_db(cfg: Cfg, db: Db) throws {
         if s.expires > now { live.push(s); }
     }
     db.sessions = live;
+    let kept: List<TrustToken> = List::new();
+    for t in db.trust_tokens {
+        if trust::live(t, now) { kept.push(t); }
+    }
+    db.trust_tokens = kept;
     try write_db(cfg.data, db);
 }
 
@@ -343,82 +383,6 @@ fn curl(config: str) throws (ApiError) -> str {
     out
 }
 
-/// Top-level scalar members of a JSON object, as text (strings decoded;
-/// numbers, `true`, `false`, `null` as written). Nested values skipped.
-pub fn json_fields(s: str) -> Dict<str, str> {
-    let out: Dict<str, str> = Dict::new();
-    let cs: List<char> = List::new();
-    for c in s.chars() { cs.push(c); }
-    let n = cs.len();
-    let i = 0usize;
-    let skip_ws = |k: usize| {
-        let j = k;
-        while j < n && (cs[j] == ' ' || cs[j] == '\n' || cs[j] == '\r' || cs[j] == '\t') { j += 1; }
-        j
-    };
-    // A string starting at `k` (its quote): text, index after it.
-    let read_str = |k: usize| {
-        let b = StrBuf::new();
-        let j = k + 1;
-        while j < n && cs[j] != '"' {
-            if cs[j] == '\\' && j + 1 < n {
-                j += 1;
-                let e = cs[j];
-                if e == 'n' { b.push('\n'); } else if e == 't' { b.push('\t'); } else if e == 'r' { b.push('\r'); } else if e == 'b' || e == 'f' { b.push(' '); } else if e == 'u' && j + 4 < n {
-                    let code = 0u32;
-                    for q in 1usize..5usize { code = code * 16u32 + (cs[j + q].to_digit(16u32) ?? 0u32); }
-                    b.push(char::from_u32(code) ?? '\u{fffd}');
-                    j += 4;
-                } else { b.push(e); }
-            } else {
-                b.push(cs[j]);
-            }
-            j += 1;
-        }
-        (b.to_str(), j + 1)
-    };
-    i = skip_ws(i);
-    if i >= n || cs[i] != '{' { return out; }
-    i += 1;
-    while i < n {
-        i = skip_ws(i);
-        if i >= n || cs[i] == '}' || cs[i] != '"' { break; }
-        let (k, after) = read_str(i);
-        i = skip_ws(after);
-        if i >= n || cs[i] != ':' { break; }
-        i = skip_ws(i + 1);
-        if i >= n { break; }
-        if cs[i] == '"' {
-            let (v, a2) = read_str(i);
-            out.insert(k, v);
-            i = a2;
-        } else if cs[i] == '{' || cs[i] == '[' {
-            let depth = 0;
-            while i < n {
-                let c = cs[i];
-                if c == '"' {
-                    i = read_str(i).1;
-                    continue;
-                }
-                if c == '{' || c == '[' { depth += 1; }
-                if c == '}' || c == ']' { depth -= 1; }
-                i += 1;
-                if depth == 0 { break; }
-            }
-        } else {
-            let b = StrBuf::new();
-            while i < n && cs[i] != ',' && cs[i] != '}' && cs[i] != ' ' && cs[i] != '\n' {
-                b.push(cs[i]);
-                i += 1;
-            }
-            out.insert(k, b.to_str());
-        }
-        i = skip_ws(i);
-        if i < n && cs[i] == ',' { i += 1; }
-    }
-    out
-}
-
 fn safe_token(t: str) -> bool {
     if t.is_empty() || t.len() > 512 { return false; }
     for c in t.chars() {
@@ -441,10 +405,10 @@ fn github_user(cfg: Cfg, code: str) throws (ApiError) -> (i64, str) {
     let callback = cfg.url + "/auth/github/callback";
     let data = f"client_id={http::pct_encode(cfg.client_id)}&client_secret={http::pct_encode(cfg.client_secret)}&code={http::pct_encode(code)}&redirect_uri={http::pct_encode(callback)}";
     let ua = "header = " + cq("User-Agent: rokstones.io") + "\n";
-    let tok = json_fields(try curl(f"url = {cq(cfg.oauth + "/login/oauth/access_token")}\n{ua}header = {cq("Accept: application/json")}\ndata = {cq(data)}\n"));
+    let tok = json::fields(try curl(f"url = {cq(cfg.oauth + "/login/oauth/access_token")}\n{ua}header = {cq("Accept: application/json")}\ndata = {cq(data)}\n"));
     let access = tok.get("access_token") ?? "";
     if !safe_token(access) { throw index::err(400, "GitHub refused the login; try again"); }
-    let user = json_fields(try curl(f"url = {cq(cfg.api + "/user")}\n{ua}header = {cq("Accept: application/vnd.github+json")}\nheader = {cq("Authorization: Bearer " + access)}\n"));
+    let user = json::fields(try curl(f"url = {cq(cfg.api + "/user")}\n{ua}header = {cq("Accept: application/vnd.github+json")}\nheader = {cq("Authorization: Bearer " + access)}\n"));
     let id = try (user.get("id") ?? "").parse::<i64>() catch _ { throw index::err(502, "GitHub sent no user id"); };
     let login = user.get("login") ?? "";
     if id <= 0i64 || !is_login(login) { throw index::err(502, "GitHub sent a malformed user"); }
@@ -499,8 +463,11 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
     b.push_str(f"<h1 class=\"t-h1\">Account</h1>\n<p class=\"t-lead\">Logged in with GitHub as <strong>{esc(a.login)}</strong>.</p>\n");
     b.push_str(f"<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button class=\"btn-2 btn-sm\" type=\"submit\">Log out</button></form>\n");
     b.push_str("<h2 class=\"t-h3\">Publish tokens</h2>\n");
-    if !is_admin(cfg, a.login) {
+    let admin = is_admin(cfg, a.login);
+    let trusted = managed(db, a.id, admin);
+    if !admin {
         b.push_str("<p>Publishing is not open yet. Until it is, stones are added by pull request to the index; <a href=\"/publishing#publishing\">Publishing</a> says how.</p>\n");
+        if !trusted.is_empty() { trusted_section(b, csrf, trusted); }
         return page(site, path, "Account", b.to_str(), 200);
     }
     if !fresh.is_empty() {
@@ -520,10 +487,31 @@ fn me_page(cfg: Cfg, site: Site, path: str, db: Db, s: Session, fresh: str) -> R
         b.push_str("</tbody>\n</table></div>\n");
     }
     b.push_str(f"<form method=\"post\" action=\"/me/tokens\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><label>Name <input name=\"name\" maxlength=\"64\" required></label> <button class=\"btn btn-sm\" type=\"submit\">Create token</button></form>\n");
+    trusted_section(b, csrf, trusted);
     page(site, path, "Account", b.to_str(), 200)
 }
 
-/// `/me`, `/logout` and `/me/tokens..`: the session's account pages.
+/// The trusted publishers of the stones the account manages, a remove
+/// button on each (not on ROKSTONES_TRUSTED's), and the form to add one.
+fn trusted_section(b: StrBuf, csrf: str, list: List<TrustedPublisher>) {
+    b.push_str("<h2 class=\"t-h3\">Trusted publishers</h2>\n");
+    b.push_str(f"<p>A GitHub Actions workflow named here publishes its stone with no token kept anywhere: it trades the job's OIDC token for one that lasts {trust::TOKEN_SECS / 60i64} minutes. <a href=\"/publishing#trusted-publishing\">Publishing</a> has the workflow.</p>\n");
+    if list.is_empty() {
+        b.push_str("<p>No trusted publishers yet.</p>\n");
+    } else {
+        b.push_str("<div class=\"table-wrap\"><table class=\"tbl\">\n<thead><tr><th>Stone</th><th>Repository</th><th>Workflow</th><th>Environment</th><th></th></tr></thead>\n<tbody>\n");
+        for p in list {
+            let env = if p.environment.is_empty() { "<span class=\"muted\">any</span>" } else { esc(p.environment) };
+            let act = if p.seeded { "<span class=\"muted\">server config</span>" } else { f"<form method=\"post\" action=\"/me/trusted/{esc(p.id)}/remove\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><button class=\"btn-2 btn-sm\" type=\"submit\">Remove</button></form>" };
+            b.push_str(f"<tr><td>{esc(p.stone)}</td><td>{esc(p.repository)}</td><td>{esc(p.workflow)}</td><td>{env}</td><td>{act}</td></tr>\n");
+        }
+        b.push_str("</tbody>\n</table></div>\n");
+    }
+    b.push_str(f"<form method=\"post\" action=\"/me/trusted\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><label>Stone <input name=\"stone\" maxlength=\"64\" required></label> <label>Repository <input name=\"repository\" placeholder=\"owner/repo\" maxlength=\"140\" required></label> <label>Workflow <input name=\"workflow\" placeholder=\"publish.yml\" maxlength=\"255\" required></label> <label>Environment <input name=\"environment\" placeholder=\"optional\" maxlength=\"255\"></label> <button class=\"btn btn-sm\" type=\"submit\">Add</button></form>\n");
+}
+
+/// `/me`, `/logout`, `/me/tokens..` and `/me/trusted..`: the session's
+/// account pages.
 fn account_route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let out = Resp { status: 500, headers: List::new(), body: "", file: "" };
     using g = LOCK.lock() {
@@ -556,7 +544,17 @@ fn account_locked(cfg: Cfg, site: Site, r: Request) throws -> Resp {
         return redirect("/", [cookie("rks_session", "", 0i64)]);
     }
     let a = account(db, s.account) ?? Account { id: 0i64, login: "", created: 0i64 };
-    if !is_admin(cfg, a.login) {
+    let admin = is_admin(cfg, a.login);
+    if r.path == "/me/trusted" {
+        let p = TrustedPublisher { stone: (f.get("stone") ?? "").trim(), repository: (f.get("repository") ?? "").trim(), workflow: (f.get("workflow") ?? "").trim(), environment: (f.get("environment") ?? "").trim() };
+        try add_trusted(cfg, db, a, admin, p) catch e { return message(site, r.path, e.status, "Trusted publisher not added", e.msg); };
+        return redirect("/me", []);
+    }
+    if let rest: str = r.path.strip_prefix("/me/trusted/") {
+        try remove_trusted(cfg, db, a, admin, rest.strip_suffix("/remove") ?? "") catch e { return message(site, r.path, e.status, "Trusted publisher not removed", e.msg); };
+        return redirect("/me", []);
+    }
+    if !admin {
         return message(site, r.path, 403, "Publishing is not open yet", "Publish tokens are not available for this account yet.");
     }
     if r.path == "/me/tokens" {
@@ -667,6 +665,207 @@ fn readme_of(cfg: Cfg, native: bool, name: str, version: str) throws (ApiError) 
     Resp { status: 200, headers: ["Content-Type: text/markdown; charset=utf-8", "Cache-Control: public, max-age=60"], body: text, file: "" }
 }
 
+/// Who a request's token speaks for: an account, or a token traded for
+/// an OIDC token, which may touch only the stones in `scope`.
+struct Auth {
+    account: Account;
+    admin: bool;
+    /// `index::key`s an exchanged token may publish and yank; none: an
+    /// account's token.
+    scope: List<str> | none;
+    /// Shown by `/api/v1/me` and recorded as the actor.
+    login: str;
+    /// The index commit's author.
+    who: str;
+}
+
+fn may(auth: Auth, db: Db, k: str, in_index: bool) -> bool {
+    match auth.scope {
+        s: List<str> => s.contains(k),
+        none => may_publish(owners_of(db, k), in_index, auth.account.id, auth.admin),
+    }
+}
+
+/// Whether account `id` may add and remove `k`'s trusted publishers: its
+/// owners and the admins. A stone with no owner on record (not published
+/// yet, or published before this server) is the admins' alone.
+fn may_manage(db: Db, k: str, id: i64, admin: bool) -> bool {
+    admin || (owners_of(db, k) ?? List::new()).contains(id)
+}
+
+/// The trusted publishers account `id` may see and change.
+fn managed(db: Db, id: i64, admin: bool) -> List<TrustedPublisher> {
+    let out: List<TrustedPublisher> = List::new();
+    for p in db.trusted {
+        if may_manage(db, index::key(p.stone), id, admin) { out.push(p); }
+    }
+    out
+}
+
+/// GitHub's spelling of `repo` and its owner's numeric id.
+fn github_repo(cfg: Cfg, repo: str) throws (ApiError) -> (str, i64) {
+    let ua = "header = " + cq("User-Agent: rokstones.io") + "\n";
+    let text = try curl(f"url = {cq(cfg.api + "/repos/" + repo)}\n{ua}header = {cq("Accept: application/vnd.github+json")}\n") catch _ {
+        throw index::err(400, f"GitHub shows no public repository {repo}");
+    };
+    let full = json::fields(text).get("full_name") ?? "";
+    let owner = json::fields(json::member(text, "owner") ?? "{}");
+    let id = try (owner.get("id") ?? "").parse::<i64>() catch _ { 0i64 };
+    if !trust::is_repo(full) || id <= 0i64 { throw index::err(502, "GitHub sent a malformed repository"); }
+    (full, id)
+}
+
+/// Add `p` for account `a`, with its repository's owner id from GitHub.
+fn add_trusted(cfg: Cfg, db: Db, a: Account, admin: bool, p: TrustedPublisher) throws (ApiError) -> TrustedPublisher {
+    try trust::check_publisher(p);
+    let k = index::key(p.stone);
+    if !may_manage(db, k, a.id, admin) {
+        throw index::err(403, f"only the owners of `{p.stone}` and the admins add its trusted publishers");
+    }
+    let n = 0usize;
+    for q in db.trusted {
+        if trust::same(q, p) { throw index::err(409, f"`{p.stone}` already trusts {q.repository} {q.workflow}"); }
+        if index::key(q.stone) == k { n += 1; }
+    }
+    if n >= trust::MAX_PER_STONE { throw index::err(400, f"a stone has at most {trust::MAX_PER_STONE} trusted publishers; remove one first"); }
+    let (full, owner_id) = try github_repo(cfg, p.repository);
+    let out = TrustedPublisher {
+        stone: p.stone,
+        repository: full,
+        owner_id: owner_id,
+        workflow: p.workflow,
+        environment: p.environment,
+        id: try secret::random_hex(8) catch e { throw index::err(500, f"{e}"); },
+        added_by: a.login,
+        added: now_secs(),
+    };
+    db.trusted.push(out);
+    try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+    out
+}
+
+/// Remove trusted publisher `id` for account `a`.
+fn remove_trusted(cfg: Cfg, db: Db, a: Account, admin: bool, id: str) throws (ApiError) {
+    let keep: List<TrustedPublisher> = List::new();
+    let gone = false;
+    for p in db.trusted {
+        if p.id != id {
+            keep.push(p);
+            continue;
+        }
+        if !may_manage(db, index::key(p.stone), a.id, admin) { throw index::err(404, "no such trusted publisher"); }
+        if p.seeded { throw index::err(400, "this trusted publisher is in the server's ROKSTONES_TRUSTED file; remove it there"); }
+        gone = true;
+    }
+    if !gone { throw index::err(404, "no such trusted publisher"); }
+    db.trusted = keep;
+    try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+}
+
+/// The issuer's key `kid`: from the cached JWKS, else fetched again (at
+/// most once a minute, so made-up kids cannot make us hammer it).
+fn oidc_key(cfg: Cfg, kid: str) throws (ApiError) -> PublicKey {
+    let cache = cfg.data + "/jwks.json";
+    let have = try fs::read_to_str(cache) catch _ { "" };
+    if let k: PublicKey = trust::find_key(have, kid) { return k; }
+    let unknown = index::err(401, f"the OIDC token's key is not one {cfg.issuer} lists");
+    let now = now_secs();
+    if now - JWKS_AT.load() < 60i64 { throw unknown; }
+    JWKS_AT.store(now);
+    let ua = "header = " + cq("User-Agent: rokstones.io") + "\n";
+    let conf = try curl(f"url = {cq(cfg.issuer + "/.well-known/openid-configuration")}\n{ua}");
+    let uri = json::fields(conf).get("jwks_uri") ?? "";
+    if !uri.starts_with(cfg.issuer + "/") { throw index::err(502, "the issuer's OIDC configuration names no jwks_uri of its own"); }
+    let keys = try curl(f"url = {cq(uri)}\n{ua}");
+    try fs::write_atomic(cache, keys) catch e { eprintln(f"jwks cache: {e}"); };
+    trust::find_key(keys, kid) ?? { throw unknown; }
+}
+
+/// The `jwt` of `TrustedPublishing { jwt: ".." }` or `{"jwt": ".."}`.
+fn jwt_of(body: str) throws (ApiError) -> str {
+    let want = index::err(400, "the body is `TrustedPublishing { jwt: \"<GitHub Actions OIDC token>\" }`");
+    if body.trim().starts_with("{") { return json::fields(body).get("jwt") ?? { throw want; }; }
+    let v = try rokon::parse(body) catch _ { throw want; };
+    if let Value::Struct { name: _, fields } = v {
+        if let Value::Str(t) = fields.get("jwt") ?? Value::None { return t; }
+    }
+    throw want;
+}
+
+/// `POST /api/v1/trusted-publishing/token`: a GitHub Actions OIDC token
+/// in, a publish token for the stones that trust its workflow out.
+fn exchange(cfg: Cfg, db: Db, body: str) throws (ApiError) -> Resp {
+    if body.len() > MAX_EXCHANGE { throw index::err(413, f"the body is at most {MAX_EXCHANGE} bytes"); }
+    let j = try trust::parse_jwt(try jwt_of(body));
+    let key = try oidc_key(cfg, j.header.get("kid") ?? "");
+    let now = now_secs();
+    try trust::check(j, key, cfg.issuer, cfg.audience, now);
+    let c = j.claims;
+    let jti = c.get("jti") ?? "";
+    for t in db.trust_tokens {
+        if t.jti == jti { throw index::err(401, "this OIDC token was exchanged already; request a new one"); }
+    }
+    let repo = c.get("repository") ?? "";
+    let wref = c.get("workflow_ref") ?? "";
+    let keys = trust::grant(db.trusted, c);
+    if keys.is_empty() {
+        let file = ((wref.split_once("/.github/workflows/") ?? ("", wref)).1.split_once("@") ?? (wref, "")).0;
+        let env = c.get("environment") ?? "";
+        throw index::err(403, f"no stone trusts {repo}, workflow {file}{if env.is_empty() { "" } else { ", environment " + env }}: an owner adds it as a trusted publisher at {cfg.url}/me");
+    }
+    let names: List<Value> = List::new();
+    for p in db.trusted {
+        if trust::matches(p, c) && !names.contains(Value::Str(p.stone)) { names.push(Value::Str(p.stone)); }
+    }
+    let tok = "rkt_" + try secret::random_hex(32) catch e { throw index::err(500, f"{e}"); };
+    let exp = try (c.get("exp") ?? "").parse::<i64>() catch _ { now };
+    db.trust_tokens.push(TrustToken {
+        hash: secret::sha256_hex(tok),
+        stones: keys,
+        publisher: "github:" + wref,
+        repository: repo,
+        jti: jti,
+        created: now,
+        expires: now + trust::TOKEN_SECS,
+        jwt_expires: exp,
+    });
+    try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
+    eprintln(f"trusted publishing: github:{wref} for {keys.join(", ")}");
+    rokon_resp(200, "TrustedToken", [("token", Value::Str(tok)), ("expires", Value::Int(Int::from(now + trust::TOKEN_SECS))), ("stones", Value::List(names))])
+}
+
+fn rokon_value(status: i32, v: Value) -> Resp {
+    Resp {
+        status: status,
+        headers: ["Content-Type: application/rokon; charset=utf-8", "Cache-Control: no-store"],
+        body: (try! rokon::to_str_flat(v)) + "\n",
+        file: "",
+    }
+}
+
+/// Fill in what `rok publish --index-dir` left out of a version already
+/// in the index from the same tree: its metadata and README. A version
+/// published through this API is taken.
+fn fill_in(cfg: Cfg, db: Db, k: str, p: index::Publish, have: str) throws (ApiError) {
+    let e = p.entry;
+    let taken = index::err(409, f"{e.name} {e.version} is already in the index");
+    if e.native { throw taken; }
+    let (_, v) = try stones::parse_line(e.line) catch x { throw index::err(400, x.msg); };
+    if v.tree != have { throw index::err(409, f"{e.name} {e.version} is already in the index from another tree ({have}); publish a new version"); }
+    for r in db.releases {
+        if r.name == k && r.version == e.version && r.published_by is Actor { throw taken; }
+    }
+    let i = release_at(db, k, e.version);
+    db.releases[i].meta = meta::over(db.releases[i].meta, p.meta);
+    let rp = meta::readme_file(cfg.data, k, e.version);
+    if !p.readme.is_empty() && !fs::exists(rp) {
+        try {
+            fs::create_dir_all(layout::dir_of(rp));
+            fs::write(rp, p.readme);
+        } catch x { eprintln(f"readme: {x}"); };
+    }
+}
+
 fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
     for (prefix, native) in [("/api/v1/stones/", false), ("/api/v1/native/", true)] {
         if let rest: str = r.path.strip_prefix(prefix) {
@@ -680,63 +879,107 @@ fn api_locked(cfg: Cfg, r: Request) throws (ApiError) -> Resp {
             return try stone_info(cfg, db, native, parts[0]);
         }
     }
-    let routes: List<(str, str)> = [("GET", "/api/v1/me"), ("POST", "/api/v1/publish"), ("POST", "/api/v1/yank")];
-    let known = false;
+    let routes: List<(str, str)> = [
+        ("GET", "/api/v1/me"),
+        ("POST", "/api/v1/publish"),
+        ("POST", "/api/v1/yank"),
+        ("POST", "/api/v1/trusted-publishing/token"),
+        ("GET", "/api/v1/trusted-publishers"),
+        ("POST", "/api/v1/trusted-publishers"),
+        ("POST", "/api/v1/trusted-publishers/remove"),
+    ];
+    let methods: List<str> = List::new();
     for (m, p) in routes {
-        if p == r.path {
-            known = true;
-            if m != r.method { throw index::err(405, f"use {m} {p}"); }
-        }
+        if p == r.path { methods.push(m); }
     }
-    if !known { throw index::err(404, "no such API route"); }
+    if methods.is_empty() { throw index::err(404, "no such API route"); }
+    if !methods.contains(r.method) { throw index::err(405, f"use {methods.join(" or ")} {r.path}"); }
     let db = try load_db(cfg) catch e { throw index::err(500, f"data: {e}"); };
-    let presented = r.header("authorization").strip_prefix("Bearer ") ?? "";
-    let tok = token_of(db, presented.trim()) ?? Token { id: "", name: "", account: 0i64, hash: "", created: 0i64, last_used: 0i64 };
-    if tok.id.is_empty() { throw index::err(401, "a valid token is required (Authorization: Bearer rks_..)"); }
-    let a = account(db, tok.account) ?? Account { id: 0i64, login: "", created: 0i64 };
-    let admin = is_admin(cfg, a.login);
-    tok.last_used = now_secs();
-    try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
-    if r.path == "/api/v1/me" {
-        return rokon_resp(200, "Me", [("login", Value::Str(a.login)), ("publish", Value::Bool(admin))]);
+    if r.path == "/api/v1/trusted-publishing/token" { return try exchange(cfg, db, r.body); }
+    let presented = (r.header("authorization").strip_prefix("Bearer ") ?? "").trim();
+    let no_account = Account { id: 0i64, login: "", created: 0i64 };
+    let auth = Auth { account: no_account, admin: false, scope: none, login: "", who: "" };
+    if presented.starts_with("rkt_") {
+        let t = trust::token_of(db.trust_tokens, presented, now_secs()) ?? {
+            throw index::err(401, "the trusted publishing token expired or is not valid; exchange a new OIDC token");
+        };
+        auth = Auth { account: no_account, admin: false, scope: t.stones, login: t.publisher, who: f"{t.repository} <index@rokstones.io>" };
+    } else {
+        let tok = token_of(db, presented) ?? Token { id: "", name: "", account: 0i64, hash: "", created: 0i64, last_used: 0i64 };
+        if tok.id.is_empty() { throw index::err(401, "a valid token is required (Authorization: Bearer rks_..)"); }
+        let a = account(db, tok.account) ?? no_account;
+        auth = Auth { account: a, admin: is_admin(cfg, a.login), scope: none, login: a.login, who: f"{a.login} <{a.id}+{a.login}@users.noreply.github.com>" };
+        tok.last_used = now_secs();
+        try save_db(cfg, db) catch e { throw index::err(500, f"data: {e}"); };
     }
-    if !admin { throw index::err(403, "Publishing is not open yet"); }
-    let who = f"{a.login} <{a.id}+{a.login}@users.noreply.github.com>";
+    let trusted = auth.scope is List<str>;
+    if r.path == "/api/v1/me" {
+        return rokon_resp(200, "Me", [("login", Value::Str(auth.login)), ("publish", Value::Bool(auth.admin || trusted))]);
+    }
+    if r.path.starts_with("/api/v1/trusted-publishers") {
+        if trusted { throw index::err(403, "trusted publishers are managed with an account's token, not a trusted publishing one"); }
+        let a = auth.account;
+        if r.method == "GET" {
+            let list: List<Value> = List::new();
+            for p in managed(db, a.id, auth.admin) { list.push(rokon::to_value(p)); }
+            return rokon_resp(200, "TrustedPublishers", [("publishers", Value::List(list))]);
+        }
+        if r.path == "/api/v1/trusted-publishers/remove" {
+            let id = "";
+            if let Value::Struct { name: _, fields } = try rokon::parse(r.body) catch _ { Value::None } {
+                if let Value::Str(x) = fields.get("id") ?? Value::None { id = x; }
+            }
+            if id.is_empty() { throw index::err(400, "the body is `Remove { id: \"..\" }`"); }
+            try remove_trusted(cfg, db, a, auth.admin, id);
+            return rokon_resp(200, "Removed", [("id", Value::Str(id))]);
+        }
+        let p: TrustedPublisher = try rokon::from_str(r.body) catch e {
+            throw index::err(400, f"the body is `TrustedPublisher {{ stone: .., repository: \"owner/repo\", workflow: \"publish.yml\", environment: \"\" }}`: {e}");
+        };
+        return rokon_value(200, rokon::to_value(try add_trusted(cfg, db, a, auth.admin, p)));
+    }
+    if !trusted && !auth.admin { throw index::err(403, "Publishing is not open yet"); }
     try index::sync(cfg.index);
-    let by = Actor { id: a.id, login: a.login, at: now_secs() };
+    let by = Actor { id: auth.account.id, login: auth.login, at: now_secs() };
     if r.path == "/api/v1/publish" {
         let p = try index::parse_publish(r.body);
         let e = p.entry;
         let k = (if e.native { "native/" } else { "" }) + index::key(e.name);
         let owners = owners_of(db, k);
-        if !may_publish(owners, try index::exists(cfg.index, e.native, e.name), a.id, admin) {
-            throw index::err(403, f"`{e.name}` belongs to other accounts");
+        if !may(auth, db, k, try index::exists(cfg.index, e.native, e.name)) {
+            throw index::err(403, if trusted { f"this token publishes only the stones that trust its workflow, not `{e.name}`" } else { f"`{e.name}` belongs to other accounts" });
         }
-        try index::check_source(cfg.data + "/sources", e);
-        try index::publish(cfg.index, e, who);
-        if owners is none { db.owners.push(Owner { name: k, accounts: [a.id] }); }
-        if !p.readme.is_empty() {
-            let rp = meta::readme_file(cfg.data, k, e.version);
-            try {
-                fs::create_dir_all(layout::dir_of(rp));
-                fs::write(rp, p.readme);
-            } catch x { eprintln(f"readme: {x}"); };
-        }
-        let i = release_at(db, k, e.version);
-        db.releases[i].meta = p.meta;
-        db.releases[i].published_by = by;
-        try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
-        STALE.store(1);
         let warnings: List<Value> = List::new();
         for w in p.warnings { warnings.push(Value::Str(w)); }
+        try index::check_source(cfg.data + "/sources", e);
+        if let have: str = try index::tree_at(cfg.index, e.native, e.name, e.version) {
+            try fill_in(cfg, db, k, p, have);
+            warnings.push(Value::Str(f"{e.name} {e.version} was already in the index from this tree; its missing metadata is filled in"));
+        } else {
+            try index::publish(cfg.index, e, auth.who);
+            // An exchanged token has no account to own the name.
+            if owners is none && !trusted { db.owners.push(Owner { name: k, accounts: [auth.account.id] }); }
+            if !p.readme.is_empty() {
+                let rp = meta::readme_file(cfg.data, k, e.version);
+                try {
+                    fs::create_dir_all(layout::dir_of(rp));
+                    fs::write(rp, p.readme);
+                } catch x { eprintln(f"readme: {x}"); };
+            }
+            let i = release_at(db, k, e.version);
+            db.releases[i].meta = p.meta;
+            db.releases[i].published_by = by;
+        }
+        try save_db(cfg, db) catch x { eprintln(f"data: {x}"); };
+        STALE.store(1);
         return rokon_resp(200, "Published", [("name", Value::Str(e.name)), ("version", Value::Str(e.version)), ("file", Value::Str(e.file)), ("warnings", Value::List(warnings))]);
     }
     let y: Yank = try rokon::from_str(r.body) catch e { throw index::err(400, f"the body is `Yank {{ name: .., version: .., undo: false, native: false, message: \"..\" }}`: {e}"); };
     if y.message.len() > YANK_MESSAGE_MAX { throw index::err(400, f"a yank message is at most {YANK_MESSAGE_MAX} bytes"); }
     if y.undo && !y.message.is_empty() { throw index::err(400, "an unyank takes no message"); }
     let k = (if y.native { "native/" } else { "" }) + index::key(y.name);
-    if !may_publish(owners_of(db, k), true, a.id, admin) { throw index::err(403, f"`{y.name}` belongs to other accounts"); }
-    let changed = try index::yank(cfg.index, y.name, y.version, !y.undo, y.native, who);
+    if !may(auth, db, k, true) { throw index::err(403, f"`{y.name}` belongs to other accounts"); }
+    let changed = try index::yank(cfg.index, y.name, y.version, !y.undo, y.native, auth.who);
     // Yanking a yanked version again only replaces its message.
     if changed || (!y.undo && !y.message.is_empty()) {
         let i = release_at(db, k, y.version);
@@ -828,7 +1071,7 @@ fn route(cfg: Cfg, site: Site, r: Request) throws -> Resp {
     let get = r.method == "GET" || r.method == "HEAD";
     if p == "/login" && get { return try login(cfg); }
     if p == "/auth/github/callback" && get { return try callback(cfg, site, r); }
-    if (p == "/me" && get) || (post && (p == "/logout" || p == "/me/tokens" || (p.starts_with("/me/tokens/") && p.ends_with("/revoke")))) {
+    if (p == "/me" && get) || (post && (p == "/logout" || p == "/me/tokens" || (p.starts_with("/me/tokens/") && p.ends_with("/revoke")) || p == "/me/trusted" || (p.starts_with("/me/trusted/") && p.ends_with("/remove")))) {
         return try account_route(cfg, site, r);
     }
     if !get { return message(site, p, 405, "Method not allowed", "Only GET here."); }
@@ -1008,8 +1251,13 @@ pub fn serve(site: Site) throws {
     // --index-dir publish) reach the checkout only through a sync.
     try index::sync(cfg.index) catch e { eprintln(f"index sync: {e.msg}"); };
     try fs::create_dir_all(cfg.data);
-    // Fail now on a bad data file, not on the first request.
-    _ = try load_db(cfg);
+    // Fail now on a bad data file or bootstrap file, not on the first
+    // request.
+    let db = try load_db(cfg);
+    let seeds = if cfg.trusted.is_empty() { List::<TrustedPublisher>::new() } else { try trust::read_seeds(cfg.trusted) };
+    db.trusted = trust::merge_seeds(db.trusted, seeds);
+    try save_db(cfg, db);
+    eprintln(f"trusted publishing: OIDC tokens from {cfg.issuer} for audience {cfg.audience}; {seeds.len()} publishers from ROKSTONES_TRUSTED");
     using l = try net::tcp_listen(cfg.addr) {
         eprintln(f"serving {site.out}/ and the API on http://{cfg.addr} for {cfg.url}");
         STALE.store(1);
@@ -1075,6 +1323,18 @@ fn ownership_and_tokens() {
 }
 
 #[test]
+fn trusted_scope() {
+    let db = Db { accounts: List::new(), sessions: List::new(), tokens: List::new(), owners: [Owner { name: "geom", accounts: [5i64] }] };
+    let nobody = Account { id: 0i64, login: "", created: 0i64 };
+    let t = Auth { account: nobody, admin: false, scope: ["geom", "ge_om"], login: "github:x", who: "" };
+    expect(may(t, db, "geom", true) && may(t, db, "ge_om", false) && !may(t, db, "json", true) && !may(t, db, "native/geom", true), "scope");
+    let owner = Auth { account: Account { id: 5i64, login: "o", created: 0i64 }, admin: false, scope: none, login: "o", who: "" };
+    expect(may(owner, db, "geom", true) && !may(owner, db, "json", true), "account");
+    expect(may_manage(db, "geom", 5i64, false) && !may_manage(db, "geom", 6i64, false), "owners manage");
+    expect(!may_manage(db, "markdown", 5i64, false) && may_manage(db, "markdown", 6i64, true), "unowned names are the admins'");
+}
+
+#[test]
 fn validators() {
     let t = http::etag("abc");
     expect(t == "\"ba7816bf8f01cfea\"", t);
@@ -1083,10 +1343,7 @@ fn validators() {
 }
 
 #[test]
-fn github_json() {
-    let f = json_fields("{\"login\": \"octo-cat\", \"id\": 583231, \"plan\": {\"name\": \"x\", \"a\": [1, \"]\"]}, \"bio\": \"a \\\"q\\\" \\u00e9\", \"site_admin\": false}");
-    expect(f["login"] == "octo-cat" && f["id"] == "583231" && f["site_admin"] == "false" && f["bio"] == "a \"q\" é" && !f.contains_key("plan"), "fields");
-    expect(json_fields("{\"error\":\"bad_verification_code\"}")["error"] == "bad_verification_code", "compact");
-    expect(json_fields("[1]").len() == 0, "not an object");
+fn curl_quoting() {
     expect(cq("a\"b\\c") == "\"a\\\"b\\\\c\"", "curl quoting");
+    expect(host_of("https://rokstones.io") == "rokstones.io" && host_of("http://Localhost:8080/x") == "localhost", "hosts");
 }
