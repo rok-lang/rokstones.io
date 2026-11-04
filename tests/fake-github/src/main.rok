@@ -1,14 +1,67 @@
-// A stand-in for GitHub's OAuth endpoints and `/user`, for tests/e2e.sh.
+// A stand-in for GitHub's OAuth endpoints, `/user`, `/repos/<owner>/<repo>`
+// and the Actions OIDC issuer, for tests/e2e.sh.
 //
 //   fake_github <addr> <client secret>
 //
 // Code `admin` logs in as `alice` (id 1001), `user` as `Bob` (id 1002).
+// Repositories of `acme` exist, owned by id 4242. The issuer is
+// http://<addr>/oidc; `POST /_mint` signs the JSON claims it is sent
+// into an OIDC token.
 
 use rok::std::env;
 use rok::std::net;
 use rok::std::net::TcpStream;
+use rok::core::crypto::HashAlgorithm;
+use rok::core::crypto::rsa::PrivateKey;
+use rok::core::encoding::base64;
+use rok::core::encoding::hex;
+use rok::core::convert::AsBytes;
 
-fn answer(s: TcpStream, secret: str) throws {
+// A 2048-bit key made for the tests only (PKCS #1 DER, hex).
+fn key() -> PrivateKey {
+    let h = "308204a50201000282010100cb1af876ed3fd7c61ad01042ffe1aba7c0702c0fb460894023fa48671f64a882ab4c14fe"
+        + "a723ea93e10b260348c392515ee68d987cc4863cc4b3c60c449a38a2f27c5ef0ba13ad46b510378a29a1ad27fc50886c"
+        + "601bb313a106242b86a4e8832588f73e0bad3bf1a62a0a4a53348f11a6e3f2a153b2a2fc1e5682ce77ffbd45a8c9808d"
+        + "e751428b7c9da37575d8320f115bd7749070b98478e496894d0962a21da3e9c7545c9d4cf313e85b0cf5af953e02e719"
+        + "7b850d31b6f3e2c93e9d762ea8f2802b8fcf3add6a5ee84b7a1941f5fe1bde4df33883907dc137d5265dc7500df4bb29"
+        + "925d4db5a0f67762298bfccfc1b727ced2f44145bfd4b7b12b6adf4b02030100010282010100aebbaf52b15da186df7e"
+        + "6cdf1740d0eaeb1615f214de9075cbfe00d8271bf41526c5b7b2359d22acc28952d4b47efc9c60a6bcde994881ac3a15"
+        + "e7a69a468bbf341a679b769a831237a792009d3c68b9e3ca6cf3bfe354b6e86b5e26cc1987a77c5d4f47e3c7cfb05fa1"
+        + "ff645e1cf390de217195f569d3ea4f376225bafb1b9b0f66ee2bd5c8bbccdcb1d847721b6cc1f6d420179f0eda957026"
+        + "d265f5a3f7d1ac15a4ffde29c8a88cbb15ee323ef267892579a0578f8ba67f3294514b4318d03961939ba27a97bb3fe9"
+        + "f606750212fc966a28496848610facd9ced6d3ab9dd1e32e28fb4ea005080c500348aa458274756143bd5c87b68b6618"
+        + "590345fcd90102818100f09c6abefeed5fff40865e9fbfcc291820deb759eed572b980d1a53c5668d8220baf9e9f3748"
+        + "7e8f7d14f3ca9f15d2d6f81422ac24a5b933139002c843e95e598a220925eb7d5d53d1559d4db0c1cd731d3ebb7ba618"
+        + "7b816efd11e49b3d99b9e45427e26b508cc52714456c7599f71c2ae8a5fd10e8cea124a09b91756d46c102818100d818"
+        + "76e134bd6a61c527ac75d798d6f7c6d7e28bb1472e0975e5df1ba7632cb6d8bd11504149286fde074c35130d12bc7583"
+        + "176675af364126ee6cb8e34a86f31acad933097642beb6b2b99156694347d645a77592d021aaafcf382034f474aeebf5"
+        + "63ea10de42ce2041339509e2e888a56d9e2622f8310048c4a7a066ab150b0281806535765556c8249c2ad91a8e59d017"
+        + "ed154e799373ba0722ee83c0dc6b80788181a6e2b3183eff357e28c50f92f14c19ae8a51b75546fc6af6ac99ef0159f5"
+        + "9cf654b0c26996f71dddad0498fc63d8f6b5f3804b57a76eb4182a8d4f3ad9a38324ff1d33c96e3d7864a2cb3cff0ebf"
+        + "79f2b69fb39e5c3f265b50cf7f55049d4102818100a3c396840135f2e2f948a1b804957d83f51b32426f2ce444a3267b"
+        + "b837583f50aa5c4e3ca5dd4d59c9c77a0756d2b77a3f0c03b5d045e235e9cd1273e33c5d9cea9703975bfa5586b66a27"
+        + "9b6f0302cbf424814de6def844a44bc3db148695cee25eeb433d595303670a428f1618f1e46c89f02a32a2287070b527"
+        + "dbb532be1502818100ccbf42b0b21d327f37bcec58c29b0885dfa527ba798eb4424c52c87b127592a13620cf905ec265"
+        + "458afc341f073b1b146ab0deb74b00d1351bfed33508ff529d8869175fe434ad5baebedcc3cf88bd0318551a8b29a742"
+        + "ee32c3072655d21518d2839850d1e3e01abccaa3371b7c50e677928dd887d7ca5e73feb316361d45ca";
+    try! PrivateKey::from_pkcs1_der(try! hex::decode(h))
+}
+
+fn b64<B: AsBytes>(b: B) -> str { base64::encode(b, base64::URL_SAFE_NO_PAD) }
+
+fn mint(claims: str) -> str {
+    let head = b64("{\"typ\":\"JWT\",\"alg\":\"RS256\",\"kid\":\"e2e\"}") + "." + b64(claims);
+    head + "." + b64(try! key().sign_pkcs1v15(HashAlgorithm::Sha256, head))
+}
+
+fn jwks() -> str {
+    let k = key().public_key();
+    let n = k.modulus();
+    let e = k.exponent();
+    f"{{\"keys\":[{{\"kty\":\"RSA\",\"alg\":\"RS256\",\"use\":\"sig\",\"kid\":\"e2e\",\"n\":\"{b64(n)}\",\"e\":\"{b64(e)}\"}}]}}"
+}
+
+fn answer(s: TcpStream, secret: str, addr: str) throws {
     let data: List<u8> = List::new();
     let buf: List<u8> = List::with_capacity(4096);
     for _ in 0..4096 { buf.push(0u8); }
@@ -37,6 +90,19 @@ fn answer(s: TcpStream, secret: str) throws {
             if body.contains("code=admin&") { out = "{\"access_token\":\"gho_alice\",\"token_type\":\"bearer\",\"scope\":\"read:user\"}"; }
             if body.contains("code=user&") { out = "{\"access_token\":\"gho_bob\",\"token_type\":\"bearer\",\"scope\":\"read:user\"}"; }
         }
+    } else if line.0.starts_with("GET /oidc/.well-known/openid-configuration ") {
+        status = "200 OK";
+        out = f"{{\"issuer\":\"http://{addr}/oidc\",\"jwks_uri\":\"http://{addr}/oidc/jwks\"}}";
+    } else if line.0.starts_with("GET /oidc/jwks ") {
+        status = "200 OK";
+        out = jwks();
+    } else if line.0.starts_with("POST /_mint ") {
+        status = "200 OK";
+        out = mint(body);
+    } else if let rest: str = line.0.strip_prefix("GET /repos/acme/") {
+        let repo = (rest.split_once(" ") ?? (rest, "")).0;
+        status = "200 OK";
+        out = f"{{\"id\":7,\"full_name\":\"acme/{repo}\",\"owner\":{{\"login\":\"acme\",\"id\":4242,\"type\":\"Organization\"}},\"private\":false}}";
     } else if line.0.starts_with("GET /user ") {
         status = "401 Unauthorized";
         if text.contains("\r\nAuthorization: Bearer gho_alice\r\n") {
@@ -55,7 +121,7 @@ fn main() throws {
     let args = env::args();
     using l = try net::tcp_listen(args[1]) {
         try for s in l.incoming() {
-            try answer(s, args[2]) catch e { eprintln(f"fake github: {e}"); };
+            try answer(s, args[2], args[1]) catch e { eprintln(f"fake github: {e}"); };
             try s.close() catch _ {};
         }
     }

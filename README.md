@@ -1,6 +1,6 @@
 # rokstones.io
 
-Source for https://rokstones.io, the Rok package registry site and server. Rok packages are called stones. One program written in Rok: it reads a checkout of the registry index ([rokstones.io-index](https://github.com/rok-lang/rokstones.io-index)) and writes a static site to `public/`; `serve` serves that site plus GitHub login, publish tokens, and the publish / yank API.
+Source for https://rokstones.io, the Rok package registry site and server. Rok packages are called stones. One program written in Rok: it reads a checkout of the registry index ([rokstones.io-index](https://github.com/rok-lang/rokstones.io-index)) and writes a static site to `public/`; `serve` serves that site plus GitHub login, publish tokens, trusted publishing from GitHub Actions, and the publish / yank API.
 
 ## Build
 
@@ -61,24 +61,42 @@ Settings live in `.env` (copy `.env.example`; process env wins over the file):
 | `ROKSTONES_ADMINS` | Comma-separated GitHub logins that may create publish tokens |
 | `ROKSTONES_DATA` | Directory of `db.rokon` (accounts, tokens, owners, each version's metadata and publisher), `readme/<name>/<version>.md` (READMEs sent with a publish) and `sources/` |
 | `ROKSTONES_INDEX` | Index checkout the server commits to and pushes from |
-| `GITHUB_OAUTH_URL`, `GITHUB_API_URL` | Default GitHub; tests point them at a fake |
+| `ROKSTONES_TRUSTED` | Optional bootstrap file of trusted publishers (see Trusted publishing) |
+| `ROKSTONES_AUDIENCE` | The `aud` an OIDC token must carry (default: the host of `ROKSTONES_URL`) |
+| `GITHUB_OAUTH_URL`, `GITHUB_API_URL`, `GITHUB_OIDC_ISSUER` | Default GitHub; tests point them at a fake |
 
 Login is GitHub OAuth only (`read:user`). Sessions are a 32-byte cookie stored as SHA-256. Publish tokens (`rks_` + 64 hex) are admin-only, stored as SHA-256 and compared in constant time. The ROKON API takes `Authorization: Bearer rks_..`:
 
 | Route | Purpose |
 |-------|---------|
 | `GET /api/v1/me` | account + publish flag |
-| `POST /api/v1/publish` | `Publish { entry: Stone { .. }, meta: { .. } }`: the index entry `rok publish` prints and the stone's metadata; answers `Published { name, version, file, warnings }` |
+| `POST /api/v1/publish` | `Publish { entry: Stone { .. }, meta: { .. } }`: the index entry `rok publish` prints and the stone's metadata; answers `Published { name, version, file, warnings }`. A version already in the index from the same tree that was not published through the API (`rok publish --index-dir`) gets the metadata and README it lacks instead of a 409 |
 | `POST /api/v1/yank` | `Yank { name, version, undo, native, message }`; `message` (at most 512 bytes) is the reason, cleared by an unyank |
 | `GET /api/v1/stones/<name>` | no token: owners, and each `Version { version, yanked, yank_message, deps, meta, has_readme, downloads, published_by, yanked_by, unyanked_by }`; `deps` is as in the index line |
 | `GET /api/v1/stones/<name>/<version>/readme` | no token: the README sent with that version, `text/markdown`; 404 when none was sent |
 | `GET /api/v1/native/<name>` | the same for a native package (and `/<version>/readme`) |
+| `POST /api/v1/trusted-publishing/token` | no token: `TrustedPublishing { jwt: ".." }` (or `{"jwt": ".."}`), a GitHub Actions OIDC token; answers `TrustedToken { token, expires, stones }` |
+| `GET /api/v1/trusted-publishers` | the trusted publishers of the stones the account owns (admins: all) |
+| `POST /api/v1/trusted-publishers` | `TrustedPublisher { stone, repository, workflow, environment }`; answers the record with its `id` and the owner's GitHub id |
+| `POST /api/v1/trusted-publishers/remove` | `Remove { id }` |
 
 An index line holds only what resolution needs, named as in the manifest: `name`, `version`, `deps`, `features`, `source`, `tree` (the commit's git tree hash), `yanked`, `toolchain`, `links`. A dependency is `{ name, req, kind, registry, optional, features, default_features, package, target }`: `package` is the stone it names when `name` is a rename (as Cargo's), `target` limits it to a triple or a `cfg(..)` expression, which the client evaluates.
 
 Index lines stay strict: a field the server does not know is refused, because every reader of the index must understand every line it resolves. The server is deployed before the clients that write a new field, so it learns the field first; a field older clients would misread also takes a higher `v` on the line.
 
 `meta` is forward compatible instead. The known keys are the manifest's descriptive fields (`description`, `license`, `license_file`, `authors`, `homepage`, `documentation`, `repository`, `readme`, `keywords`, `categories`, `include`, `exclude`, `publish`, `metadata`, `links`, `default_run`), what the client measured (`has_lib`, `bin_names`, `size`: packed bytes) and `readme_content` (the README text, at most 512 KiB). They are checked; any other key is kept as sent (at most 32 keys, 16 KiB), returned in the API with the rest, and named in the reply's `warnings`, never refused. The metadata is kept in `db.rokon` with the account and time of the publish, yank and unyank; the README text in its own file, shown on the stone page in place of the commit's README.
+
+### Trusted publishing
+
+A stone's owners (or the admins) name GitHub Actions workflows that may publish it: repository `owner/repo`, workflow file, and optionally an environment, on the account page or through the API. Adding one looks up the repository's owner id on GitHub, so a deleted and re-registered owner name does not match. A stone with no owner on record (not published yet, or from before this server) gets its first trusted publisher only from an admin or from `ROKSTONES_TRUSTED`: a ROKON list read at each start, replacing the publishers it gave before, which the account page shows but cannot remove:
+
+```rokon
+[
+    TrustedPublisher { stone: "json", repository: "rok-lang/json", owner_id: 341800840, workflow: "publish.yml" },
+]
+```
+
+The job sends its OIDC token to `POST /api/v1/trusted-publishing/token`. The server takes RS256 only, checks the signature against the issuer's JWKS (cached in `ROKSTONES_DATA/jwks.json`, fetched again for an unknown `kid` at most once a minute), `iss`, `aud`, `exp` / `nbf` / `iat` with 60 s of leeway, and refuses a `jti` it has seen. The claims match a publisher when `repository` and `repository_owner_id` are its own, `workflow_ref` is its workflow file at any ref (the calling workflow, not a reusable one it calls), and `environment` is its environment when it names one. The answer is an `rkt_` token, stored as SHA-256, that lasts 30 minutes and may publish and yank only the matched stones; `rok login` takes it (`/api/v1/me` says it may publish). Versions it publishes record `github:<workflow_ref>` as `published_by`, and their index commits are authored by the repository. `pages/publish.yml` is the workflow for a stone's repository.
 
 `downloads` stays 0: stones are fetched from their git source, not from this server, so nothing counts them yet. The field is there for when the server serves archives.
 
@@ -120,11 +138,14 @@ Edit `site.rokon` (ROKON). Key fields: `title`, `tagline`, `description`, `index
 | `src/meta.rok`   | Per-version metadata and publisher records kept in `db.rokon` |
 | `src/migrate.rok` | `migrate-index`: 0.1 index lines to the 0.2 names |
 | `src/secret.rok` | SHA-256, random bytes, constant-time compare |
+| `src/trust.rok`  | Trusted publishing: OIDC token (JWT) checks, JWKS keys, claim matching, exchanged tokens, the bootstrap file |
+| `src/json.rok`   | The JSON GitHub answers with |
 | `src/stones.rok` | Reads the index, semver ordering, dependents, version dates, README and source tree fetching |
 | `src/apidoc.rok` | API tab: public items and `///` docs scanned from a stone's sources; the install box's `use` line |
 | `src/layout.rok` | Page frame, home, stone list, publishing guide, stone pages and their tabs (Readme, API, Versions, Dependencies, Dependents) |
-| `tests/`         | `e2e.sh` and the fake GitHub it runs |
+| `tests/`         | `e2e.sh` and the fake GitHub it runs (OAuth, `/user`, `/repos`, an OIDC issuer that signs test tokens) |
 | `pages/publishing.md` | Publishing guide text |
+| `pages/publish.yml` | The trusted publishing workflow for a stone's repository |
 | `static/`        | `style.css`, `search.js`, `og.png` |
 | `web/`           | the web kit (submodule): `rok.css`, `theme.js`, `keys.js`, marks and icons, and the `web` library (HTTP, addresses, header and footer markup) |
 | `og/`            | Open Graph cards: `node og/render.mjs` after a build, then build again |

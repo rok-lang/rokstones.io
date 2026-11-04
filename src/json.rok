@@ -1,0 +1,161 @@
+// The JSON GitHub answers with (OAuth, /user, /repos, OIDC discovery,
+// JWKS, OIDC token claims): members of an object and elements of an
+// array, as text. Not a validating parser.
+
+fn chars(s: str) -> List<char> {
+    let cs: List<char> = List::new();
+    for c in s.chars() { cs.push(c); }
+    cs
+}
+
+fn ws(cs: List<char>, k: usize) -> usize {
+    let j = k;
+    while j < cs.len() && (cs[j] == ' ' || cs[j] == '\n' || cs[j] == '\r' || cs[j] == '\t') { j += 1; }
+    j
+}
+
+/// The string whose quote is at `k`: its text, and the index past it.
+fn read_str(cs: List<char>, k: usize) -> (str, usize) {
+    let n = cs.len();
+    let b = StrBuf::new();
+    let j = k + 1;
+    while j < n && cs[j] != '"' {
+        if cs[j] == '\\' && j + 1 < n {
+            j += 1;
+            let e = cs[j];
+            if e == 'n' { b.push('\n'); } else if e == 't' { b.push('\t'); } else if e == 'r' { b.push('\r'); } else if e == 'b' || e == 'f' { b.push(' '); } else if e == 'u' && j + 4 < n {
+                let code = 0u32;
+                for q in 1usize..5usize { code = code * 16u32 + (cs[j + q].to_digit(16u32) ?? 0u32); }
+                b.push(char::from_u32(code) ?? '\u{fffd}');
+                j += 4;
+            } else { b.push(e); }
+        } else {
+            b.push(cs[j]);
+        }
+        j += 1;
+    }
+    (b.to_str(), j + 1)
+}
+
+/// The index past the value at `k`.
+fn skip(cs: List<char>, k: usize) -> usize {
+    let n = cs.len();
+    let i = k;
+    if i >= n { return n; }
+    if cs[i] == '"' { return read_str(cs, i).1; }
+    if cs[i] == '{' || cs[i] == '[' {
+        let depth = 0;
+        while i < n {
+            let c = cs[i];
+            if c == '"' {
+                i = read_str(cs, i).1;
+                continue;
+            }
+            if c == '{' || c == '[' { depth += 1; }
+            if c == '}' || c == ']' { depth -= 1; }
+            i += 1;
+            if depth == 0 { break; }
+        }
+        return i;
+    }
+    while i < n && cs[i] != ',' && cs[i] != '}' && cs[i] != ']' && cs[i] != ' ' && cs[i] != '\n' && cs[i] != '\r' && cs[i] != '\t' { i += 1; }
+    i
+}
+
+fn text(cs: List<char>, a: usize, b: usize) -> str {
+    let t = StrBuf::new();
+    for i in a..b { t.push(cs[i]); }
+    t.to_str()
+}
+
+/// Each member of the object `s` in order: its key, its value as text
+/// (a string decoded, anything else as written) and whether it is a
+/// string. Empty when `s` is not an object.
+pub fn members(s: str) -> List<(str, str, bool)> {
+    let out: List<(str, str, bool)> = List::new();
+    let cs = chars(s);
+    let n = cs.len();
+    let i = ws(cs, 0usize);
+    if i >= n || cs[i] != '{' { return out; }
+    i += 1;
+    while i < n {
+        i = ws(cs, i);
+        if i >= n || cs[i] != '"' { break; }
+        let (k, after) = read_str(cs, i);
+        i = ws(cs, after);
+        if i >= n || cs[i] != ':' { break; }
+        i = ws(cs, i + 1);
+        if i >= n { break; }
+        if cs[i] == '"' {
+            let (v, a2) = read_str(cs, i);
+            out.push((k, v, true));
+            i = a2;
+        } else {
+            let end = skip(cs, i);
+            out.push((k, text(cs, i, end), false));
+            i = end;
+        }
+        i = ws(cs, i);
+        if i < n && cs[i] == ',' { i += 1; }
+    }
+    out
+}
+
+/// Top-level scalar members of an object, as text (strings decoded;
+/// numbers, `true`, `false`, `null` as written). Nested values skipped.
+pub fn fields(s: str) -> Dict<str, str> {
+    let out: Dict<str, str> = Dict::new();
+    for (k, v, quoted) in members(s) {
+        if quoted || !(v.starts_with("{") || v.starts_with("[")) { out.insert(k, v); }
+    }
+    out
+}
+
+/// The text of member `key` of the object `s` (an object or array as
+/// written), or none.
+pub fn member(s: str, key: str) -> str | none {
+    let found: str | none = none;
+    for (k, v, _) in members(s) {
+        if k == key { found = v; }
+    }
+    found
+}
+
+/// Each element of the array `s`, as written.
+pub fn items(s: str) -> List<str> {
+    let out: List<str> = List::new();
+    let cs = chars(s);
+    let n = cs.len();
+    let i = ws(cs, 0usize);
+    if i >= n || cs[i] != '[' { return out; }
+    i += 1;
+    while i < n {
+        i = ws(cs, i);
+        if i >= n || cs[i] == ']' { break; }
+        let end = skip(cs, i);
+        if end == i { break; }
+        out.push(text(cs, i, end));
+        i = ws(cs, end);
+        if i < n && cs[i] == ',' { i += 1; }
+    }
+    out
+}
+
+#[cfg(test)]
+fn expect(ok: bool, what: str) {
+    if !ok { panic(what); }
+}
+
+#[test]
+fn github_json() {
+    let f = fields("{\"login\": \"octo-cat\", \"id\": 583231, \"plan\": {\"name\": \"x\", \"a\": [1, \"]\"]}, \"bio\": \"a \\\"q\\\" \\u00e9\", \"site_admin\": false}");
+    expect(f["login"] == "octo-cat" && f["id"] == "583231" && f["site_admin"] == "false" && f["bio"] == "a \"q\" é" && !f.contains_key("plan"), "fields");
+    expect(fields("{\"error\":\"bad_verification_code\"}")["error"] == "bad_verification_code", "compact");
+    expect(fields("[1]").len() == 0, "not an object");
+    let repo = "{\"id\": 9, \"full_name\": \"o/r\", \"owner\": {\"login\": \"o\", \"id\": 42, \"x\": [\"}\"]}, \"private\": false}";
+    let owner = member(repo, "owner") ?? "";
+    expect(fields(owner)["id"] == "42" && fields(repo)["full_name"] == "o/r" && member(repo, "nope") is none, owner);
+    let keys = items(member("{\"keys\":[{\"kid\":\"a\"},{\"kid\":\"b,]\"}]}", "keys") ?? "");
+    expect(keys.len() == 2 && fields(keys[1])["kid"] == "b,]", f"{keys:?}");
+    expect(items("[]").len() == 0 && items("[1, \"x\" ,true]").len() == 3 && items("{}").len() == 0, "items");
+}

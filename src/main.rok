@@ -19,6 +19,8 @@ mod server;
 mod apidoc;
 mod meta;
 mod migrate;
+mod json;
+mod trust;
 
 use rok::std::env;
 use rok::std::fs;
